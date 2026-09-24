@@ -145,35 +145,55 @@ impl Typer {
         self.wait_for_modifiers_released();
         if let [Action::Text(first), rest @ ..] = actions {
             let first = normalize_punctuation(first);
-            if let Some(delta) = first.strip_prefix(live.text.as_str()) {
-                let mut typed = live.keystrokes + self.type_text(delta)?;
+            // Keep what the live words and the final transcript share and
+            // correct only from the first difference ("wrld" -> "world"
+            // costs three backspaces, not the whole phrase).
+            let common = live
+                .text
+                .chars()
+                .zip(first.chars())
+                .take_while(|(a, b)| a == b)
+                .count();
+            if common > 0 {
+                let erase = live
+                    .text
+                    .chars()
+                    .skip(common)
+                    .filter(|&c| key_for(c).is_some() || self.unicode_fallback)
+                    .count();
+                if erase > 0 {
+                    log::debug!("correcting {erase} characters of live words");
+                }
+                self.backspace(erase)?;
+                self.last_char = live.text.chars().nth(common - 1);
+                let tail: String = first.chars().skip(common).collect();
+                let mut typed = live.keystrokes - erase + self.type_raw(&tail)?;
                 typed += self.run(rest)?;
                 self.last_len = typed;
                 return Ok(());
             }
         }
         log::debug!("final transcript differs from live words; retyping the phrase");
-        for _ in 0..live.keystrokes {
+        self.backspace(live.keystrokes)?;
+        self.last_char = live.char_before;
+        self.perform(actions)
+    }
+
+    fn backspace(&mut self, times: usize) -> Result<()> {
+        for _ in 0..times {
             self.tap(KeyCombo {
                 ctrl: false,
                 shift: false,
                 key: NamedKey::Backspace,
             })?;
         }
-        self.last_char = live.char_before;
-        self.perform(actions)
+        Ok(())
     }
 
     pub fn perform(&mut self, actions: &[Action]) -> Result<()> {
         self.wait_for_modifiers_released();
         if actions == [Action::DeleteLast] {
-            for _ in 0..self.last_len {
-                self.tap(KeyCombo {
-                    ctrl: false,
-                    shift: false,
-                    key: NamedKey::Backspace,
-                })?;
-            }
+            self.backspace(self.last_len)?;
             self.last_len = 0;
             self.last_char = None;
             return Ok(());
@@ -230,8 +250,18 @@ impl Typer {
             }
             _ => false,
         };
+        let text: String = needs_space
+            .then_some(' ')
+            .into_iter()
+            .chain(text.chars())
+            .collect();
+        self.type_raw(&text)
+    }
+
+    /// Type `text` exactly, with no joining space.
+    fn type_raw(&mut self, text: &str) -> Result<usize> {
         let mut count = 0;
-        for c in needs_space.then_some(' ').into_iter().chain(text.chars()) {
+        for c in text.chars() {
             if let Some((code, shift)) = key_for(c) {
                 self.press(code, shift, false)?;
                 count += 1;

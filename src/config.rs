@@ -22,8 +22,11 @@ pub struct Config {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SttConfig {
-    /// Whisper model name (tiny.en, base.en, small.en, medium.en, large-v3-turbo, ...).
+    /// Whisper model for finished phrases (tiny.en, base.en, small.en-q5_1, ...).
     pub model: String,
+    /// A faster model for the words typed while you are still speaking.
+    /// Empty uses `model` for both. See `Accuracy`.
+    pub live_model: String,
     /// Explicit path to a ggml model file; overrides `model`.
     pub model_path: Option<PathBuf>,
     /// Download the model on first start if it is missing.
@@ -48,6 +51,7 @@ impl Default for SttConfig {
     fn default() -> Self {
         Self {
             model: "base.en".into(),
+            live_model: String::new(),
             model_path: None,
             auto_download: true,
             language: "en".into(),
@@ -200,6 +204,43 @@ impl Default for OverlayConfig {
             margin: 48,
             font_size: 13,
             visible: true,
+        }
+    }
+}
+
+/// The two ways RavenVoice can listen, switchable from the overlay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Accuracy {
+    /// base.en for everything: text lands ~0.5 s after you pause.
+    Fast,
+    /// base.en for live words, then small.en re-transcribes each finished
+    /// phrase and corrects what it got wrong (~2 s per phrase on CPU).
+    Accurate,
+}
+
+impl Accuracy {
+    pub const FAST_MODEL: &str = "base.en";
+    pub const ACCURATE_MODEL: &str = "small.en-q5_1";
+
+    pub fn of(stt: &SttConfig) -> Accuracy {
+        if stt.model == Self::FAST_MODEL || stt.model.starts_with("tiny") {
+            Accuracy::Fast
+        } else {
+            Accuracy::Accurate
+        }
+    }
+
+    pub fn apply(self, stt: &mut SttConfig) {
+        stt.model_path = None;
+        match self {
+            Accuracy::Fast => {
+                stt.model = Self::FAST_MODEL.into();
+                stt.live_model = String::new();
+            }
+            Accuracy::Accurate => {
+                stt.model = Self::ACCURATE_MODEL.into();
+                stt.live_model = Self::FAST_MODEL.into();
+            }
         }
     }
 }

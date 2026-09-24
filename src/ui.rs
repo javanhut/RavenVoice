@@ -22,7 +22,7 @@ use gtk::{gdk, gio, glib};
 use gtk4 as gtk;
 
 use crate::audio::MicInfo;
-use crate::config::Config;
+use crate::config::{Accuracy, Config};
 use crate::engine::{Cmd, Engine, UiEvent};
 
 const APP_ID: &str = "org.raven.RavenVoice";
@@ -577,8 +577,30 @@ fn build(app: &gtk::Application, cfg: Config, engine: Engine) -> Rc<Ui> {
     engine_info.set_xalign(0.0);
     engine_info.set_wrap(true);
     engine_info.set_max_width_chars(34);
+    let accuracy_heading = gtk::Label::new(Some("ACCURACY"));
+    accuracy_heading.add_css_class("rv-heading");
+    accuracy_heading.set_xalign(0.0);
+    let accuracy_select = gtk::DropDown::from_strings(&[
+        "Fast — text ~0.5 s after you pause",
+        "Accurate — fixes mistakes, ~2 s per phrase",
+    ]);
+    set_label(&accuracy_select, "Accuracy");
+    accuracy_select.set_selected(match Accuracy::of(&cfg.stt) {
+        Accuracy::Fast => 0,
+        Accuracy::Accurate => 1,
+    });
+    let e = engine.clone();
+    accuracy_select.connect_selected_notify(move |dd| {
+        e.send(Cmd::SetAccuracy(if dd.selected() == 1 {
+            Accuracy::Accurate
+        } else {
+            Accuracy::Fast
+        }));
+    });
     body.append(&heading);
     body.append(&mic_select);
+    body.append(&accuracy_heading);
+    body.append(&accuracy_select);
     body.append(&engine_info);
     body.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
     body.append(&menu_item("Open settings file", || {
@@ -856,6 +878,12 @@ impl Ui {
                 self.flash(format!("Ready — Whisper {model}"), false);
             }
             UiEvent::ModelProgress(f) => self.download.set(Some(f)),
+            UiEvent::Loading(model) => {
+                self.ready.set(false);
+                self.download.set(None);
+                self.engine_info
+                    .set_text(&format!("Loading Whisper {model}…"));
+            }
             UiEvent::Listening(on) => {
                 self.listening.set(on);
                 self.opening.set(on);

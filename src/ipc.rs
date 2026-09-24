@@ -13,6 +13,7 @@ use std::sync::atomic::Ordering;
 
 use anyhow::{Context, Result, bail};
 
+use crate::config::Accuracy;
 use crate::engine::{Cmd, Engine, UiEvent};
 
 pub fn socket_path() -> PathBuf {
@@ -83,6 +84,11 @@ fn handle(mut stream: UnixStream, engine: &Engine) -> Result<()> {
         "stop" => ok(engine, Cmd::Stop),
         "speak" => ok(engine, Cmd::Speak(arg)),
         "speak-last" => ok(engine, Cmd::SpeakLast),
+        "accuracy" => match arg.trim() {
+            "fast" => ok(engine, Cmd::SetAccuracy(Accuracy::Fast)),
+            "accurate" => ok(engine, Cmd::SetAccuracy(Accuracy::Accurate)),
+            other => format!("error: accuracy is `fast` or `accurate`, not {other:?}"),
+        },
         "stop-speaking" => ok(engine, Cmd::StopSpeaking),
         "show" | "hide" | "toggle-overlay" => {
             let visible = match verb {

@@ -77,6 +77,23 @@ ravenvoice download-model small.en
 ravenvoice transcribe recording.wav # offline test
 ```
 
+## Accuracy
+
+Pick it in the overlay's ⚙ menu, or run `ravenvoice accuracy fast|accurate`:
+
+| Mode | How it works | Speed on CPU |
+|---|---|---|
+| **Fast** (default) | `base.en` does everything | text ~0.5 s after you pause |
+| **Accurate** | `base.en` types words live while you talk, then `small.en` re-transcribes each finished phrase and corrects only the words it got wrong | corrections land ~2 s after you pause |
+
+On noisy test sentences, Fast wrote "RVM" for "rvn" and "for thesis comparing
+photos emphasis in Algae"; Accurate got them right. The first switch
+downloads `small.en-q5_1` (190 MB). Beam search and larger models were
+measured too: beam search was slower and no better, and `large-v3-turbo`
+takes ~13 s per phrase on CPU. It needs a GPU build (`--features vulkan`).
+
+Names and jargon it keeps missing go in `stt.vocabulary`.
+
 ## Settings
 
 `~/.config/ravenvoice/config.toml` is created on first run. The ones people
@@ -84,7 +101,6 @@ change most:
 
 ```toml
 [stt]
-model = "small.en"      # more accurate than base.en, ~3x slower
 vocabulary = "Raven, Huginn, rvn"   # names and jargon it should know
 
 [audio]

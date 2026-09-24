@@ -58,6 +58,11 @@ enum Command {
     Status,
     /// Quit the running instance.
     Quit,
+    /// Choose `fast` (base.en) or `accurate` (small.en corrects each phrase).
+    Accuracy {
+        #[arg(value_parser = ["fast", "accurate"])]
+        mode: String,
+    },
     /// List microphones.
     Devices,
     /// List known Whisper models.
@@ -104,6 +109,21 @@ fn main() -> Result<()> {
         Command::Status => remote("status", None),
         Command::Quit => remote("quit", None),
         Command::Speak { text } => speak(text),
+        Command::Accuracy { mode } => {
+            if ipc::already_running() {
+                return remote("accuracy", Some(&mode));
+            }
+            let mut cfg = Config::load();
+            let accuracy = if mode == "accurate" {
+                config::Accuracy::Accurate
+            } else {
+                config::Accuracy::Fast
+            };
+            accuracy.apply(&mut cfg.stt);
+            cfg.save()?;
+            println!("Saved: {mode} (takes effect when RavenVoice starts)");
+            Ok(())
+        }
         Command::Devices => devices(),
         Command::Models => {
             let cfg = Config::load();

@@ -9,9 +9,17 @@ use anyhow::{Context, Result, bail};
 pub const KNOWN_MODELS: &[(&str, &str)] = &[
     ("tiny.en", "75 MB, fastest, rough"),
     ("base.en", "142 MB, fast, good for dictation"),
-    ("small.en", "466 MB, noticeably more accurate"),
+    (
+        "small.en-q5_1",
+        "190 MB, much more accurate (Accurate mode)",
+    ),
+    ("small.en", "466 MB, same as small.en-q5_1, larger file"),
     ("medium.en", "1.5 GB, very accurate, slow on CPU"),
-    ("large-v3-turbo", "1.6 GB, multilingual, best quality"),
+    (
+        "large-v3-turbo",
+        "1.6 GB, multilingual, best quality, needs a GPU",
+    ),
+    ("large-v3-turbo-q5_0", "574 MB, as above in a smaller file"),
     ("tiny", "75 MB, multilingual"),
     ("base", "142 MB, multilingual"),
     ("small", "466 MB, multilingual"),

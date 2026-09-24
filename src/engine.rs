@@ -17,7 +17,7 @@ use crossbeam_channel::{Receiver, Sender, bounded, select, tick, unbounded};
 
 use crate::audio::{self, Capture, MicInfo};
 use crate::commands::{self, Action};
-use crate::config::Config;
+use crate::config::{Accuracy, Config};
 use crate::stt::Transcriber;
 use crate::tts;
 use crate::typer::{HeldModifiers, Typer};
@@ -34,6 +34,8 @@ pub enum Cmd {
     Speak(String),
     SpeakLast,
     StopSpeaking,
+    /// Switch between Fast and Accurate transcription (saved to the config).
+    SetAccuracy(Accuracy),
 }
 
 #[derive(Debug, Clone)]
@@ -44,6 +46,8 @@ pub enum UiEvent {
         tts: String,
     },
     ModelProgress(f32),
+    /// Switching models: not ready until the next `Ready`.
+    Loading(String),
     Listening(bool),
     /// Audio is flowing from the microphone; speak now.
     MicLive,
@@ -86,6 +90,8 @@ pub struct Engine {
 enum SttJob {
     Final(u64, Vec<f32>),
     Partial(u64, Vec<f32>),
+    /// Load the models these settings name (Accuracy was switched).
+    Reload(crate::config::SttConfig),
 }
 
 enum TypeJob {
@@ -295,6 +301,17 @@ impl Control {
                 }
             }
             Cmd::StopSpeaking => self.interrupt.stop(),
+            Cmd::SetAccuracy(accuracy) => {
+                if Accuracy::of(&self.cfg.stt) == accuracy {
+                    return;
+                }
+                accuracy.apply(&mut self.cfg.stt);
+                if let Err(e) = self.cfg.save() {
+                    log::warn!("saving accuracy choice: {e}");
+                }
+                // Queued behind any phrase still being transcribed.
+                let _ = self.final_tx.send(SttJob::Reload(self.cfg.stt.clone()));
+            }
         }
     }
 
@@ -524,37 +541,15 @@ impl Control {
 
 fn stt_thread(
     e: Engine,
-    cfg: Config,
+    mut cfg: Config,
     final_rx: Receiver<SttJob>,
     partial_rx: Receiver<SttJob>,
     type_tx: Sender<TypeJob>,
     pending: Arc<AtomicUsize>,
 ) {
-    let path = cfg.model_path();
-    if !path.exists() && cfg.stt.model_path.is_none() && cfg.stt.auto_download {
-        e.ui(UiEvent::Notice(format!(
-            "Downloading the {} speech model (one time)…",
-            cfg.stt.model
-        )));
-        let ui = e.ui.clone();
-        if let Err(err) = crate::model::download(&cfg.stt.model, &path, |f| {
-            let _ = ui.send_blocking(UiEvent::ModelProgress(f));
-        }) {
-            e.ui(UiEvent::Error(format!("Model download failed: {err:#}")));
-            return;
-        }
-    }
-    let mut stt = match Transcriber::load(&path, &cfg.stt) {
-        Ok(t) => t,
-        Err(err) => {
-            e.ui(UiEvent::Error(format!("{err:#}")));
-            return;
-        }
+    let Some(mut models) = Models::load(&e, &cfg) else {
+        return;
     };
-    e.ui(UiEvent::Ready {
-        model: cfg.stt.model.clone(),
-        tts: tts::engine_name(&cfg.tts),
-    });
 
     let typing_live = cfg.typing.enabled && cfg.typing.realtime;
     let mut live = LiveWords::default();
@@ -575,12 +570,21 @@ fn stt_thread(
             ""
         };
         match job {
+            SttJob::Reload(stt) => {
+                cfg.stt = stt;
+                e.ui(UiEvent::Loading(cfg.stt.model.clone()));
+                match Models::load(&e, &cfg) {
+                    Some(m) => models = m,
+                    // Keep dictating with what was loaded before.
+                    None => log::warn!("keeping the previous models"),
+                }
+            }
             SttJob::Partial(id, clip) => {
                 // Stale once that phrase is finished or another is waiting.
                 if id <= last_final_id || !final_rx.is_empty() {
                     continue;
                 }
-                let Ok(text) = stt.transcribe(&clip, ctx, true) else {
+                let Ok(text) = models.live().transcribe(&clip, ctx, true) else {
                     continue;
                 };
                 if text.is_empty() {
@@ -596,7 +600,7 @@ fn stt_thread(
             SttJob::Final(id, clip) => {
                 last_final_id = id;
                 let started = Instant::now();
-                let result = stt.transcribe(&clip, ctx, false);
+                let result = models.main.transcribe(&clip, ctx, false);
                 let left = pending.fetch_sub(1, Ordering::SeqCst) - 1;
                 if left == 0 {
                     e.ui(UiEvent::Transcribing(false));
@@ -609,10 +613,11 @@ fn stt_thread(
                     }
                 };
                 log::info!(
-                    "{:.1}s of audio -> {:?} in {} ms",
+                    "{:.1}s of audio -> {:?} in {} ms ({})",
                     clip.len() as f32 / audio::SAMPLE_RATE as f32,
                     text,
-                    started.elapsed().as_millis()
+                    started.elapsed().as_millis(),
+                    cfg.stt.model
                 );
                 if text.is_empty() {
                     // Take back anything typed live for a phrase that turned out to be nothing.
@@ -646,6 +651,70 @@ fn stt_thread(
                 e.ui(UiEvent::Final(describe(&actions)));
                 let _ = type_tx.send(TypeJob::Final(id, actions));
             }
+        }
+    }
+}
+
+/// The model that transcribes finished phrases, and optionally a faster one
+/// for the words typed while you are still speaking.
+struct Models {
+    main: Transcriber,
+    live: Option<Transcriber>,
+}
+
+impl Models {
+    /// Load (downloading if needed) the models `cfg` names, reporting to the
+    /// overlay. None if the main model cannot be had.
+    fn load(e: &Engine, cfg: &Config) -> Option<Models> {
+        let main = load_model(e, cfg, &cfg.stt.model, cfg.model_path())?;
+        let live_name = cfg.stt.live_model.trim();
+        let live = if live_name.is_empty() || live_name == cfg.stt.model {
+            None
+        } else {
+            // Without the fast model, live words simply come from the main one.
+            load_model(e, cfg, live_name, crate::model::path_for(live_name))
+        };
+        e.ui(UiEvent::Ready {
+            model: match &live {
+                Some(_) => format!("{} (live: {live_name})", cfg.stt.model),
+                None => cfg.stt.model.clone(),
+            },
+            tts: tts::engine_name(&cfg.tts),
+        });
+        Some(Models { main, live })
+    }
+
+    fn live(&mut self) -> &mut Transcriber {
+        self.live.as_mut().unwrap_or(&mut self.main)
+    }
+}
+
+fn load_model(
+    e: &Engine,
+    cfg: &Config,
+    name: &str,
+    path: std::path::PathBuf,
+) -> Option<Transcriber> {
+    let explicit = cfg.stt.model_path.is_some() && name == cfg.stt.model;
+    if !path.exists() && !explicit && cfg.stt.auto_download {
+        e.ui(UiEvent::Notice(format!(
+            "Downloading the {name} speech model (one time)…"
+        )));
+        let ui = e.ui.clone();
+        if let Err(err) = crate::model::download(name, &path, |f| {
+            let _ = ui.send_blocking(UiEvent::ModelProgress(f));
+        }) {
+            e.ui(UiEvent::Error(format!("Model download failed: {err:#}")));
+            return None;
+        }
+    }
+    let mut stt_cfg = cfg.stt.clone();
+    stt_cfg.model = name.to_string();
+    match Transcriber::load(&path, &stt_cfg) {
+        Ok(t) => Some(t),
+        Err(err) => {
+            e.ui(UiEvent::Error(format!("{err:#}")));
+            None
         }
     }
 }
