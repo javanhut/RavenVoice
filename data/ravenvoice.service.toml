@@ -1,0 +1,14 @@
+# RavenVoice under `raven-init --user`: started with the session, restarted
+# if it dies, logged to ~/.local/state/raven/log/ravenvoice.log.
+#
+# `imlazy install` writes this to ~/.config/raven/services/ravenvoice.toml
+# with @BINDIR@ filled in. Session services start without WAYLAND_DISPLAY;
+# RavenVoice finds the compositor socket in $XDG_RUNTIME_DIR itself.
+[[services]]
+name = "ravenvoice"
+description = "Dictation and read-aloud overlay"
+exec = "@BINDIR@/ravenvoice"
+args = ["run"]
+restart = true
+enabled = true
+critical = false

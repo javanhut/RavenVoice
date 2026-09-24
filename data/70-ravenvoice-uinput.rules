@@ -1,0 +1,11 @@
+# Let the `input` group create virtual keyboards through /dev/uinput, so
+# RavenVoice can type dictated text into whichever app has focus.
+#
+# Installed by scripts/system-deps.sh (run by every `imlazy build`/`run`). By hand:
+#
+#   sudo install -Dm644 data/70-ravenvoice-uinput.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload && sudo udevadm trigger -s misc -y uinput
+#
+# `input` is the group that can already read every keyboard on the machine, so
+# letting it also write synthetic key presses adds little to what it could do.
+KERNEL=="uinput", SUBSYSTEM=="misc", GROUP="input", MODE="0660", OPTIONS+="static_node=uinput"

@@ -1,0 +1,92 @@
+# ImLazy configuration file
+
+[settings]
+default = "build"
+
+[variables]
+# Where `install` puts things. `$HOME/.local` needs no root and is picked up by
+# the launcher; override per run, e.g. `imlazy install prefix=/usr/local`.
+prefix = "$HOME/.local"
+
+[commands]
+
+# Everything that builds or runs RavenVoice depends on this first. It checks
+# for what the build links against (gtk4, gtk4-layer-shell, alsa), the tools
+# it calls (cargo, a C++ compiler, cmake for whisper.cpp, espeak-ng for read
+# aloud) and write access to /dev/uinput, and fixes only what is missing --
+# with `rvn` on Raven or the distribution's package manager elsewhere -- so a
+# fresh machine needs nothing done by hand. A no-op when all is there.
+[commands.system-deps]
+desc = "Install the system packages and permissions RavenVoice needs"
+alias = ["setup", "deps"]
+run = ["scripts/system-deps.sh"]
+
+[commands.build]
+desc = "Build ravenvoice"
+dep = ["system-deps"]
+alias = ["b"]
+run = ["cargo build"]
+watch = ["src/**/*.rs", "Cargo.toml"]
+
+[commands.release]
+desc = "Build ravenvoice with optimisations (Whisper is much faster)"
+dep = ["system-deps"]
+run = ["cargo build --release"]
+
+[commands.run]
+desc = "Run the dictation overlay"
+dep = ["system-deps"]
+alias = ["r"]
+run = ["cargo run --release"]
+
+[commands.debug]
+desc = "Run the overlay with RavenVoice's own logging turned up"
+dep = ["system-deps"]
+env = { RUST_LOG = "ravenvoice=debug,info" }
+run = ["cargo run --release"]
+
+[commands.doctor]
+desc = "Check microphones, typing permission, shortcuts, model and voice"
+dep = ["system-deps"]
+run = ["cargo run --release -- doctor"]
+
+[commands.model]
+desc = "Download the configured Whisper model (or: imlazy model -- small.en)"
+dep = ["system-deps"]
+run = ["cargo run --release -- download-model"]
+
+[commands.check]
+desc = "Type-check everything, tests included"
+dep = ["system-deps"]
+alias = ["c"]
+run = ["cargo check --all-targets"]
+
+[commands.clippy]
+desc = "Lint with warnings as errors"
+dep = ["system-deps"]
+alias = ["l", "lint"]
+run = ["cargo clippy --all-targets -- -D warnings"]
+
+[commands.fmt]
+desc = "Format code"
+alias = ["f"]
+run = ["cargo fmt"]
+
+[commands.test]
+desc = "Run tests"
+dep = ["system-deps"]
+alias = ["t"]
+run = ["cargo test"]
+
+[commands.install]
+desc = "Build and install RavenVoice for this user, starting with the session"
+dep = ["release"]
+run = ["scripts/install.sh {{prefix}}"]
+
+[commands.uninstall]
+desc = "Remove an installed RavenVoice — settings and models are left alone"
+run = ["scripts/install.sh --uninstall {{prefix}}"]
+
+[commands.clean]
+desc = "Remove build artefacts"
+run = ["cargo clean"]

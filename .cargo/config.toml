@@ -1,0 +1,7 @@
+[env]
+# whisper-rs-sys ships pre-generated bindings; skip bindgen so libclang is not required.
+WHISPER_DONT_GENERATE_BINDINGS = "1"
+# /usr/sbin comes before /usr/bin in the Raven PATH and is a symlink to it, but
+# cmake invoked as /usr/sbin/cmake cannot find its modules ("Could not find
+# CMAKE_ROOT"). Name the real path for whisper.cpp's build.
+CMAKE = "/usr/bin/cmake"

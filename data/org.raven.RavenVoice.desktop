@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=RavenVoice
+GenericName=Dictation and Read Aloud
+Comment=Type with your voice in any app, and have text read aloud
+Exec=ravenvoice
+Icon=audio-input-microphone
+Terminal=false
+Categories=Utility;Accessibility;
+Keywords=dictation;speech;voice;stt;tts;accessibility;whisper;
+StartupNotify=false
