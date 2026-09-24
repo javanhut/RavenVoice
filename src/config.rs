@@ -71,6 +71,9 @@ pub struct AudioConfig {
     pub min_speech_ms: u32,
     /// A phrase is cut and transcribed after this many seconds even without a pause.
     pub max_phrase_secs: f32,
+    /// While you speak, transcribe the phrase so far this often (ms) and type
+    /// the words that have settled. Lower is snappier and uses more CPU.
+    pub stream_interval_ms: u32,
     /// How far above the measured background noise speech must be (ratio).
     pub sensitivity: f32,
 }
@@ -82,7 +85,8 @@ impl Default for AudioConfig {
             silence_ms: 800,
             min_speech_ms: 300,
             max_phrase_secs: 20.0,
-            sensitivity: 3.0,
+            stream_interval_ms: 600,
+            sensitivity: 2.5,
         }
     }
 }
@@ -119,6 +123,9 @@ impl Default for HotkeyConfig {
 pub struct TypingConfig {
     /// Type recognised text into the focused app (via /dev/uinput).
     pub enabled: bool,
+    /// Type words while you are still speaking, correcting them when the
+    /// phrase ends if Whisper changes its mind. Off = type whole phrases.
+    pub realtime: bool,
     /// Delay between synthetic key presses. Raise it if an app drops letters.
     pub key_delay_ms: u64,
     /// Understand "new line", "new paragraph", "scratch that", "stop listening", ...
@@ -132,6 +139,7 @@ impl Default for TypingConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            realtime: true,
             key_delay_ms: 4,
             voice_commands: true,
             unicode_fallback: "skip".into(),

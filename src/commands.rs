@@ -84,6 +84,46 @@ fn whole_phrase_command(norm: &str) -> Option<Action> {
     }
 }
 
+/// Every phrase `whole_phrase_command` understands.
+const COMMAND_PHRASES: &[&str] = &[
+    "scratch that",
+    "delete that",
+    "erase that",
+    "stop listening",
+    "stop dictation",
+    "stop dictating",
+    "press enter",
+    "press return",
+    "press tab",
+    "press escape",
+    "backspace",
+    "press backspace",
+    "undo",
+    "undo that",
+    "redo",
+    "redo that",
+    "select all",
+    "copy that",
+    "cut that",
+    "paste",
+    "paste that",
+];
+
+/// True while the start of a phrase could still turn out to be a spoken
+/// command ("scratch" before "that" arrives), so live typing should wait.
+pub fn could_be_command(text: &str) -> bool {
+    let norm = normalize(text);
+    !norm.is_empty()
+        && COMMAND_PHRASES
+            .iter()
+            .any(|c| *c == norm || c.starts_with(&format!("{norm} ")))
+}
+
+/// Words that may be the start of an inline command ("new" -> "new line").
+pub fn may_start_inline_command(word: &str) -> bool {
+    normalize(word) == "new"
+}
+
 /// Turn a recognised phrase into things to type or do.
 pub fn interpret(text: &str, commands_enabled: bool) -> Vec<Action> {
     let text = text.trim();
@@ -173,6 +213,16 @@ mod tests {
             interpret("End of section. New paragraph.", true),
             vec![Action::Text("End of section.".into()), enter(), enter()]
         );
+    }
+
+    #[test]
+    fn command_prefixes_are_held_back() {
+        assert!(could_be_command("Scratch"));
+        assert!(could_be_command("stop"));
+        assert!(could_be_command("Select all."));
+        assert!(!could_be_command("Scratch the surface"));
+        assert!(!could_be_command("Hello"));
+        assert!(may_start_inline_command("new"));
     }
 
     #[test]

@@ -81,13 +81,18 @@ pub struct Engine {
     pub held: Arc<HeldModifiers>,
 }
 
+/// Phrases are numbered so live typing and the final transcript of the same
+/// phrase can be matched up.
 enum SttJob {
-    Final(Vec<f32>),
-    Partial(Vec<f32>),
+    Final(u64, Vec<f32>),
+    Partial(u64, Vec<f32>),
 }
 
 enum TypeJob {
-    Actions(Vec<Action>),
+    /// Words of a phrase still being spoken that have stopped changing.
+    Stream(u64, String),
+    /// The finished phrase.
+    Final(u64, Vec<Action>),
     Reset,
 }
 
@@ -171,6 +176,7 @@ struct Control {
     awaiting_audio: bool,
     started_at: Instant,
     seg: Segmenter,
+    phrase_id: u64,
     push_to_talk: bool,
     mics: Vec<MicInfo>,
     final_tx: Sender<SttJob>,
@@ -197,6 +203,7 @@ impl Control {
         let (audio_tx, audio_rx) = bounded(256);
         Self {
             seg: Segmenter::new(&cfg.audio),
+            phrase_id: 0,
             host: cpal::default_host(),
             e,
             cfg,
@@ -431,17 +438,23 @@ impl Control {
     fn handle_vad(&mut self, events: Vec<VadEvent>) {
         for ev in events {
             match ev {
-                VadEvent::SpeechStarted => self.e.ui(UiEvent::Hearing(true)),
+                VadEvent::SpeechStarted => {
+                    self.phrase_id += 1;
+                    self.e.ui(UiEvent::Hearing(true));
+                }
                 VadEvent::Partial(clip) => {
-                    if self.cfg.stt.live_preview {
-                        let _ = self.partial_tx.try_send(SttJob::Partial(clip));
+                    let typing_live = self.cfg.typing.enabled && self.cfg.typing.realtime;
+                    if self.cfg.stt.live_preview || typing_live {
+                        let _ = self
+                            .partial_tx
+                            .try_send(SttJob::Partial(self.phrase_id, clip));
                     }
                 }
                 VadEvent::Phrase(clip) => {
                     self.e.ui(UiEvent::Hearing(false));
                     self.pending.fetch_add(1, Ordering::SeqCst);
                     self.e.ui(UiEvent::Transcribing(true));
-                    let _ = self.final_tx.send(SttJob::Final(clip));
+                    let _ = self.final_tx.send(SttJob::Final(self.phrase_id, clip));
                 }
             }
         }
@@ -543,6 +556,9 @@ fn stt_thread(
         tts: tts::engine_name(&cfg.tts),
     });
 
+    let typing_live = cfg.typing.enabled && cfg.typing.realtime;
+    let mut live = LiveWords::default();
+    let mut last_final_id = 0u64;
     let mut context = String::new();
     loop {
         // Finished phrases always win over live previews.
@@ -559,17 +575,26 @@ fn stt_thread(
             ""
         };
         match job {
-            SttJob::Partial(clip) => {
-                if !final_rx.is_empty() {
+            SttJob::Partial(id, clip) => {
+                // Stale once that phrase is finished or another is waiting.
+                if id <= last_final_id || !final_rx.is_empty() {
                     continue;
                 }
-                if let Ok(text) = stt.transcribe(&clip, ctx, true)
-                    && !text.is_empty()
-                {
+                let Ok(text) = stt.transcribe(&clip, ctx, true) else {
+                    continue;
+                };
+                if text.is_empty() {
+                    continue;
+                }
+                if typing_live && let Some(settled) = live.update(id, &text, &cfg) {
+                    let _ = type_tx.send(TypeJob::Stream(id, settled));
+                }
+                if cfg.stt.live_preview {
                     e.ui(UiEvent::Partial(text));
                 }
             }
-            SttJob::Final(clip) => {
+            SttJob::Final(id, clip) => {
+                last_final_id = id;
                 let started = Instant::now();
                 let result = stt.transcribe(&clip, ctx, false);
                 let left = pending.fetch_sub(1, Ordering::SeqCst) - 1;
@@ -590,11 +615,14 @@ fn stt_thread(
                     started.elapsed().as_millis()
                 );
                 if text.is_empty() {
+                    // Take back anything typed live for a phrase that turned out to be nothing.
+                    let _ = type_tx.send(TypeJob::Final(id, Vec::new()));
                     e.ui(UiEvent::Partial(String::new()));
                     continue;
                 }
                 let actions = commands::interpret(&text, cfg.typing.voice_commands);
                 if actions.contains(&Action::StopListening) {
+                    let _ = type_tx.send(TypeJob::Final(id, Vec::new()));
                     e.send(Cmd::Stop);
                     e.ui(UiEvent::Final("Stopped listening".into()));
                     continue;
@@ -616,9 +644,67 @@ fn stt_thread(
                     }
                 }
                 e.ui(UiEvent::Final(describe(&actions)));
-                let _ = type_tx.send(TypeJob::Actions(actions));
+                let _ = type_tx.send(TypeJob::Final(id, actions));
             }
         }
+    }
+}
+
+/// Decides which words of a phrase still being spoken are safe to type.
+///
+/// Whisper revises its guess as more audio arrives, so a word is only typed
+/// once two successive transcripts agree on it, and never the last word
+/// heard (it may be cut off mid-syllable). Anything that could still become
+/// a spoken command waits for the final transcript.
+#[derive(Default)]
+struct LiveWords {
+    id: u64,
+    previous: Vec<String>,
+    settled: String,
+}
+
+impl LiveWords {
+    /// Returns the settled text for the phrase when it has grown.
+    fn update(&mut self, id: u64, text: &str, cfg: &Config) -> Option<String> {
+        if id != self.id {
+            *self = LiveWords {
+                id,
+                ..Default::default()
+            };
+        }
+        let words: Vec<String> = text.split_whitespace().map(str::to_string).collect();
+        let key = |w: &str| {
+            w.chars()
+                .filter(|c| c.is_alphanumeric())
+                .flat_map(char::to_lowercase)
+                .collect::<String>()
+        };
+        let agreed = self
+            .previous
+            .iter()
+            .zip(&words)
+            .take_while(|(a, b)| key(a) == key(b))
+            .count();
+        let mut n = agreed.min(words.len().saturating_sub(1));
+        if cfg.typing.voice_commands {
+            // Stop before a possible "new line" / "new paragraph".
+            if let Some(i) = words[..n]
+                .iter()
+                .position(|w| commands::may_start_inline_command(w))
+            {
+                n = i;
+            }
+        }
+        self.previous = words.clone();
+        let candidate = words[..n].join(" ");
+        if cfg.typing.voice_commands && commands::could_be_command(&candidate) {
+            return None;
+        }
+        if candidate.len() > self.settled.len() && candidate.starts_with(&self.settled) {
+            self.settled = candidate.clone();
+            return Some(candidate);
+        }
+        None
     }
 }
 
@@ -669,7 +755,8 @@ fn typer_thread(e: Engine, cfg: Config, rx: Receiver<TypeJob>) {
                 t.reset();
                 Ok(())
             }
-            TypeJob::Actions(actions) => t.perform(&actions),
+            TypeJob::Stream(id, text) => t.stream(id, &text),
+            TypeJob::Final(id, actions) => t.finish(id, &actions),
         };
         if let Err(err) = result {
             e.ui(UiEvent::Error(format!("Typing failed: {err:#}")));
@@ -687,5 +774,59 @@ fn tts_thread(e: Engine, cfg: Config, rx: Receiver<String>, interrupt: tts::Inte
         }
         e.shared.speaking.store(false, Ordering::SeqCst);
         e.ui(UiEvent::Speaking(false));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Feed successive partial transcripts; collect what would be typed.
+    fn stream(partials: &[&str]) -> Vec<String> {
+        let cfg = Config::default();
+        let mut live = LiveWords::default();
+        partials
+            .iter()
+            .filter_map(|p| live.update(1, p, &cfg))
+            .collect()
+    }
+
+    #[test]
+    fn types_words_once_two_transcripts_agree() {
+        assert_eq!(
+            stream(&[
+                "And so",
+                "And so my fellow",
+                "And so my fellow Americans ask"
+            ]),
+            vec!["And so".to_string(), "And so my fellow".to_string()]
+        );
+    }
+
+    #[test]
+    fn never_types_the_newest_word() {
+        assert!(stream(&["Hello", "Hello"]).is_empty());
+    }
+
+    #[test]
+    fn waits_on_possible_commands() {
+        assert!(stream(&["Scratch that", "Scratch that"]).is_empty());
+        assert_eq!(
+            stream(&["Dear Sam, new line", "Dear Sam, new line thanks"]),
+            vec!["Dear Sam,".to_string()]
+        );
+    }
+
+    #[test]
+    fn ignores_revisions_of_settled_words() {
+        // "fellow" became "yellow": nothing already typed is retracted live.
+        assert_eq!(
+            stream(&[
+                "my fellow Americans",
+                "my fellow Americans ask",
+                "my yellow Americans ask not"
+            ]),
+            vec!["my fellow Americans".to_string()]
+        );
     }
 }

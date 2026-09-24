@@ -71,6 +71,19 @@ impl Transcriber {
             audio
         };
 
+        // Quiet microphones (a laptop mic at 40%) transcribe much better
+        // brought up to a normal level; cap the gain so hiss is not boosted
+        // into "speech".
+        let peak = audio.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        let normalized;
+        let audio = if peak > 1e-4 && peak < 0.5 {
+            let gain = (0.7 / peak).min(8.0);
+            normalized = audio.iter().map(|s| s * gain).collect::<Vec<_>>();
+            &normalized[..]
+        } else {
+            audio
+        };
+
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
         params.set_n_threads(self.threads);
         params.set_language(self.language.as_deref());

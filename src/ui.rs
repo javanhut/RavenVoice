@@ -166,6 +166,63 @@ pub fn preview(cfg: Config, out: PathBuf, state: String) -> glib::ExitCode {
     app.run_with_args::<&str>(&[])
 }
 
+/// Open a focused window with a text field, type into it through the virtual
+/// keyboard exactly as dictation does, and print what arrived.
+pub fn test_typing(cfg: Config, watch: Option<u64>) -> glib::ExitCode {
+    const SAMPLE: &str = "Hello from RavenVoice, testing 1 2 3.";
+    let app = gtk::Application::builder()
+        .application_id("org.raven.RavenVoice.TypingTest")
+        .build();
+    app.connect_activate(move |app| {
+        let window = gtk::ApplicationWindow::new(app);
+        window.set_title(Some("RavenVoice typing test"));
+        window.set_default_size(520, 80);
+        let entry = gtk::Entry::new();
+        window.set_child(Some(&entry));
+        window.present();
+        entry.grab_focus();
+        if let Some(secs) = watch {
+            let started = Instant::now();
+            entry.connect_changed(move |e| {
+                println!("{:6.2}s  {:?}", started.elapsed().as_secs_f32(), e.text());
+            });
+            let app = app.clone();
+            glib::timeout_add_local_once(Duration::from_secs(secs), move || app.quit());
+            return;
+        }
+        let (cfg, app) = (cfg.clone(), app.clone());
+        glib::timeout_add_local_once(Duration::from_millis(700), move || {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let typing = cfg.typing.clone();
+            std::thread::spawn(move || {
+                let result = crate::typer::Typer::new(&typing, Default::default())
+                    .and_then(|mut t| t.perform(&[crate::commands::Action::Text(SAMPLE.into())]));
+                let _ = tx.send(result.map_err(|e| format!("{e:#}")));
+            });
+            glib::timeout_add_local(Duration::from_millis(100), move || match rx.try_recv() {
+                Ok(result) => {
+                    let entry = entry.clone();
+                    let app = app.clone();
+                    glib::timeout_add_local_once(Duration::from_millis(400), move || {
+                        let got = entry.text();
+                        println!("sent:     {SAMPLE:?}");
+                        println!("received: {got:?}");
+                        match result {
+                            Err(e) => println!("typer error: {e}"),
+                            Ok(()) if got == SAMPLE => println!("OK: typing works"),
+                            Ok(()) => println!("MISMATCH: keys were sent but did not all arrive"),
+                        }
+                        app.quit();
+                    });
+                    glib::ControlFlow::Break
+                }
+                Err(_) => glib::ControlFlow::Continue,
+            });
+        });
+    });
+    app.run_with_args::<&str>(&[])
+}
+
 fn snapshot_to_png(ui: &Ui, out: &std::path::Path) -> Result<(), String> {
     let root = &ui.window;
     let (w, h) = (root.width() as f64, root.height() as f64);

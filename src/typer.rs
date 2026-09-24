@@ -58,6 +58,17 @@ pub struct Typer {
     /// Keystrokes that made up the last phrase, for "scratch that".
     last_len: usize,
     last_char: Option<char>,
+    /// Words typed while the current phrase is still being spoken.
+    live: Option<LivePhrase>,
+}
+
+struct LivePhrase {
+    id: u64,
+    /// Exactly what has been typed for this phrase (without the joining space).
+    text: String,
+    keystrokes: usize,
+    /// What preceded the phrase, to restore spacing if it is retyped.
+    char_before: Option<char>,
 }
 
 impl Typer {
@@ -83,6 +94,7 @@ impl Typer {
             held,
             last_len: 0,
             last_char: None,
+            live: None,
         })
     }
 
@@ -90,6 +102,66 @@ impl Typer {
     pub fn reset(&mut self) {
         self.last_char = None;
         self.last_len = 0;
+        self.live = None;
+    }
+
+    /// Type the words of phrase `id` that have settled so far. `settled`
+    /// is everything settled for the phrase; only what is new gets typed.
+    pub fn stream(&mut self, id: u64, settled: &str) -> Result<()> {
+        let settled = normalize_punctuation(settled);
+        if self.live.as_ref().is_none_or(|l| l.id != id) {
+            self.live = Some(LivePhrase {
+                id,
+                text: String::new(),
+                keystrokes: 0,
+                char_before: self.last_char,
+            });
+        }
+        let live = self.live.as_ref().expect("set above");
+        // If Whisper revised earlier words, leave them for the final pass.
+        let Some(delta) = settled.strip_prefix(live.text.as_str()) else {
+            return Ok(());
+        };
+        if delta.is_empty() {
+            return Ok(());
+        }
+        let delta = delta.to_string();
+        self.wait_for_modifiers_released();
+        let typed = self.type_text(&delta)?;
+        let live = self.live.as_mut().expect("set above");
+        live.keystrokes += typed;
+        live.text = settled;
+        Ok(())
+    }
+
+    /// Phrase `id` is complete: add whatever the final transcript has beyond
+    /// the words typed live, or take those back and type it afresh if
+    /// Whisper changed its mind.
+    pub fn finish(&mut self, id: u64, actions: &[Action]) -> Result<()> {
+        let live = self.live.take().filter(|l| l.id == id && l.keystrokes > 0);
+        let Some(live) = live else {
+            return self.perform(actions);
+        };
+        self.wait_for_modifiers_released();
+        if let [Action::Text(first), rest @ ..] = actions {
+            let first = normalize_punctuation(first);
+            if let Some(delta) = first.strip_prefix(live.text.as_str()) {
+                let mut typed = live.keystrokes + self.type_text(delta)?;
+                typed += self.run(rest)?;
+                self.last_len = typed;
+                return Ok(());
+            }
+        }
+        log::debug!("final transcript differs from live words; retyping the phrase");
+        for _ in 0..live.keystrokes {
+            self.tap(KeyCombo {
+                ctrl: false,
+                shift: false,
+                key: NamedKey::Backspace,
+            })?;
+        }
+        self.last_char = live.char_before;
+        self.perform(actions)
     }
 
     pub fn perform(&mut self, actions: &[Action]) -> Result<()> {
@@ -106,6 +178,15 @@ impl Typer {
             self.last_char = None;
             return Ok(());
         }
+        let typed = self.run(actions)?;
+        if typed > 0 {
+            self.last_len = typed;
+        }
+        Ok(())
+    }
+
+    /// Carry out `actions`, returning the keystrokes that produced characters.
+    fn run(&mut self, actions: &[Action]) -> Result<usize> {
         let mut typed = 0;
         for action in actions {
             match action {
@@ -127,10 +208,7 @@ impl Typer {
                 Action::DeleteLast | Action::StopListening => {}
             }
         }
-        if typed > 0 {
-            self.last_len = typed;
-        }
-        Ok(())
+        Ok(typed)
     }
 
     fn wait_for_modifiers_released(&self) {
@@ -146,7 +224,9 @@ impl Typer {
         let text = normalize_punctuation(text);
         let needs_space = match (self.last_char, text.chars().next()) {
             (Some(prev), Some(first)) => {
-                !prev.is_whitespace() && !matches!(first, '.' | ',' | '!' | '?' | ';' | ':' | ')')
+                !prev.is_whitespace()
+                    && !first.is_whitespace()
+                    && !matches!(first, '.' | ',' | '!' | '?' | ';' | ':' | ')')
             }
             _ => false,
         };

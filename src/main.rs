@@ -76,6 +76,14 @@ enum Command {
         #[arg(long, default_value = "listening")]
         state: String,
     },
+    /// Type a sample sentence into a test window and report what arrived.
+    #[command(hide = true)]
+    TestTyping {
+        /// Instead of typing, show a text field for this many seconds and
+        /// print what dictation types into it.
+        #[arg(long)]
+        watch: Option<u64>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -119,6 +127,11 @@ fn main() -> Result<()> {
         }
         Command::Transcribe { wav } => transcribe(&wav),
         Command::Doctor => doctor(),
+        Command::TestTyping { watch } => {
+            find_wayland_display()?;
+            ui::test_typing(Config::load(), watch);
+            Ok(())
+        }
         Command::Preview { out, state } => {
             find_wayland_display()?;
             ui::preview(Config::load(), out, state);
