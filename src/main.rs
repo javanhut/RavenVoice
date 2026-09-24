@@ -68,6 +68,14 @@ enum Command {
     Transcribe { wav: PathBuf },
     /// Check that everything RavenVoice needs is in place.
     Doctor,
+    /// Render the overlay to a PNG (for design work).
+    #[command(hide = true)]
+    Preview {
+        out: PathBuf,
+        /// idle, listening, hearing, speaking, error, compact or panel
+        #[arg(long, default_value = "listening")]
+        state: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -111,6 +119,11 @@ fn main() -> Result<()> {
         }
         Command::Transcribe { wav } => transcribe(&wav),
         Command::Doctor => doctor(),
+        Command::Preview { out, state } => {
+            find_wayland_display()?;
+            ui::preview(Config::load(), out, state);
+            Ok(())
+        }
     }
 }
 
