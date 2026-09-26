@@ -16,7 +16,12 @@ prefix = "$HOME/.local"
 # aloud) and write access to /dev/uinput, and fixes only what is missing --
 # with `rvn` on Raven or the distribution's package manager elsewhere -- so a
 # fresh machine needs nothing done by hand. A no-op when all is there.
+[commands.add-permissions]
+escalate = true
+run = ["chmod +x scripts/system-deps.sh", "chmod +x scripts/install.sh"]
+
 [commands.system-deps]
+dep = ["add-permissions"]
 desc = "Install the system packages and permissions RavenVoice needs"
 alias = ["setup", "deps"]
 run = ["scripts/system-deps.sh"]
@@ -80,7 +85,7 @@ run = ["cargo test"]
 
 [commands.install]
 desc = "Build and install RavenVoice for this user, starting with the session"
-dep = ["release"]
+dep = ["add-permssions", "release"]
 run = ["scripts/install.sh {{prefix}}"]
 
 [commands.uninstall]
