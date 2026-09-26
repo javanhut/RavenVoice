@@ -3,6 +3,7 @@
 mod audio;
 mod commands;
 mod config;
+mod desktop;
 mod engine;
 mod hotkey;
 mod ipc;

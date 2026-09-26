@@ -23,6 +23,7 @@ use gtk4 as gtk;
 
 use crate::audio::MicInfo;
 use crate::config::{Accuracy, Config};
+use crate::desktop::{self, Desktop, ThemeMode};
 use crate::engine::{Cmd, Engine, UiEvent};
 
 const APP_ID: &str = "org.raven.RavenVoice";
@@ -103,6 +104,7 @@ pub fn run(
             }
         });
         start_timers(&ui);
+        watch_desktop(&ui);
     });
     // GTK must not try to parse our command line.
     app.run_with_args::<&str>(&[])
@@ -270,87 +272,188 @@ fn start_timers(ui: &Rc<Ui>) {
     });
 }
 
-fn css(font_size: u32) -> String {
+/// The neutrals one scheme is drawn in. The accent is the desktop's and is
+/// not here: the listening ring, the glow, the checked toggle and the Speak
+/// button are all derived from it in `css()`.
+#[derive(Clone, Copy)]
+struct Palette {
+    /// The pill's ground, as `r, g, b` so its alpha can follow transparency.
+    bar: &'static str,
+    /// White on dark, black on light: hairlines and control washes are this
+    /// at low alpha.
+    ink: &'static str,
+    shadow: f64,
+    fg: &'static str,
+    title: &'static str,
+    muted: &'static str,
+    control_fg: &'static str,
+    ring: (&'static str, &'static str),
+    core: (&'static str, &'static str, &'static str),
+    core_fg: &'static str,
+    popover: &'static str,
+    done: &'static str,
+    error: &'static str,
+    error_sub: &'static str,
+    /// How the live partial is tinted from the accent: mixed toward white on
+    /// dark, shaded down on light.
+    live: &'static str,
+}
+
+const DARK: Palette = Palette {
+    bar: "17, 20, 31",
+    ink: "255, 255, 255",
+    shadow: 0.45,
+    fg: "#eef0f8",
+    title: "#f4f5fb",
+    muted: "#8a90a8",
+    control_fg: "#dfe2ee",
+    ring: ("#4a4e66", "#2c2f42"),
+    core: ("#151826", "#1c2031", "#23283b"),
+    core_fg: "#ffffff",
+    popover: "#171a28",
+    done: "#86efac",
+    error: "#fca5a5",
+    error_sub: "#e8b4b4",
+    live: "mix({accent}, #ffffff, 0.55)",
+};
+
+const LIGHT: Palette = Palette {
+    bar: "248, 249, 252",
+    ink: "0, 0, 0",
+    shadow: 0.18,
+    fg: "#1b1e2b",
+    title: "#12141d",
+    muted: "#5d6378",
+    control_fg: "#2a2e3d",
+    ring: ("#c9ccd8", "#e3e5ee"),
+    core: ("#ffffff", "#f1f2f7", "#e6e8f0"),
+    core_fg: "#1b1e2b",
+    popover: "#fbfbfd",
+    done: "#15803d",
+    error: "#b91c1c",
+    error_sub: "#9f3a3a",
+    live: "shade({accent}, 0.7)",
+};
+
+/// Raven's auto means dark.
+fn palette(mode: ThemeMode) -> &'static Palette {
+    match mode {
+        ThemeMode::Light => &LIGHT,
+        ThemeMode::Dark | ThemeMode::Auto => &DARK,
+    }
+}
+
+fn css(font_size: u32, desktop: &Desktop) -> String {
     let title = font_size + 2;
     let small = font_size.saturating_sub(1).max(8);
+    let p = palette(desktop.appearance.theme_mode);
+    let accent = desktop.accent();
+    let Palette {
+        bar,
+        ink,
+        shadow,
+        fg,
+        title: title_fg,
+        muted,
+        control_fg,
+        core_fg,
+        popover,
+        done,
+        error,
+        error_sub,
+        ..
+    } = *p;
+    let (ring_a, ring_b) = p.ring;
+    let (core, core_hover, core_active) = p.core;
+    let live = p.live.replace("{accent}", accent);
+    // Glass lets a little of the desktop through; the compositor blurs it.
+    let bar_alpha = if desktop.appearance.transparency {
+        0.96
+    } else {
+        1.0
+    };
     format!(
         r#"
+@define-color accent_bg_color {accent};
+@define-color accent_color {accent};
+
 window.ravenvoice {{ background: transparent; }}
 
 .rv-bar {{
-  background-color: rgba(17, 20, 31, 0.96);
-  background-image: linear-gradient(180deg, rgba(255,255,255,0.035), rgba(255,255,255,0));
-  color: #eef0f8;
+  background-color: rgba({bar}, {bar_alpha});
+  background-image: linear-gradient(180deg, rgba({ink},0.035), rgba({ink},0));
+  color: {fg};
   border-radius: 40px;
-  border: 1px solid rgba(255, 255, 255, 0.09);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba({ink}, 0.09);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, {shadow});
   padding: 8px 12px 8px 8px;
   margin: 14px;
   font-size: {font_size}pt;
 }}
 
-/* Microphone: a dark disc inside a ring that lights up while listening. */
+/* Microphone: a disc inside a ring that lights up in the accent while
+   listening. */
 button.rv-mic, button.rv-mic:hover, button.rv-mic:active, button.rv-mic:checked {{
   min-width: 0; min-height: 0;
   padding: 3px;
   border: none;
   border-radius: 999px;
   background-color: transparent;
-  background-image: linear-gradient(135deg, #4a4e66, #2c2f42);
+  background-image: linear-gradient(135deg, {ring_a}, {ring_b});
   box-shadow: none;
   transition: box-shadow 200ms ease;
 }}
 button.rv-mic.listening {{
-  background-image: linear-gradient(135deg, #6d28d9 0%, #a21caf 55%, #e11d48 100%);
-  box-shadow: 0 0 18px rgba(192, 38, 211, 0.40);
+  background-image: linear-gradient(135deg, shade({accent}, 0.75) 0%, {accent} 55%, shade({accent}, 1.35) 100%);
+  box-shadow: 0 0 18px alpha({accent}, 0.40);
 }}
-button.rv-mic.hearing {{ box-shadow: 0 0 26px rgba(236, 72, 153, 0.70); }}
+button.rv-mic.hearing {{ box-shadow: 0 0 26px alpha(shade({accent}, 1.2), 0.70); }}
 .rv-mic-core {{
   min-width: 64px; min-height: 64px;
   border-radius: 999px;
-  background-color: #151826;
-  color: #ffffff;
+  background-color: {core};
+  color: {core_fg};
 }}
-button.rv-mic:hover .rv-mic-core {{ background-color: #1c2031; }}
-button.rv-mic:active .rv-mic-core {{ background-color: #23283b; }}
+button.rv-mic:hover .rv-mic-core {{ background-color: {core_hover}; }}
+button.rv-mic:active .rv-mic-core {{ background-color: {core_active}; }}
 
 .rv-divider {{
   min-width: 1px;
-  background-color: rgba(255, 255, 255, 0.10);
+  background-color: rgba({ink}, 0.10);
   margin: 10px 4px;
 }}
 
-.rv-title {{ font-size: {title}pt; font-weight: 600; color: #f4f5fb; }}
-.rv-subtitle {{ font-size: {small}pt; color: #8a90a8; }}
-.rv-title.live {{ color: #f4f5fb; }}
-.rv-subtitle.live {{ color: #c7b8f5; font-style: italic; }}
-.rv-title.done {{ color: #86efac; }}
-.rv-title.error {{ color: #fca5a5; }}
-.rv-subtitle.error {{ color: #e8b4b4; }}
+.rv-title {{ font-size: {title}pt; font-weight: 600; color: {title_fg}; }}
+.rv-subtitle {{ font-size: {small}pt; color: {muted}; }}
+.rv-title.live {{ color: {title_fg}; }}
+.rv-subtitle.live {{ color: {live}; font-style: italic; }}
+.rv-title.done {{ color: {done}; }}
+.rv-title.error {{ color: {error}; }}
+.rv-subtitle.error {{ color: {error_sub}; }}
 
 /* Square-ish controls on the right. */
 .rv-group {{
   border-radius: 14px;
-  background-color: rgba(255, 255, 255, 0.06);
+  background-color: rgba({ink}, 0.06);
 }}
 .rv-group button {{ border-radius: 14px; }}
 button.rv-ctl, .rv-group button, menubutton.rv-ctl > button {{
   min-width: 44px; min-height: 44px;
   padding: 0 10px;
   border: none;
-  background-color: rgba(255, 255, 255, 0.06);
+  background-color: rgba({ink}, 0.06);
   background-image: none;
   box-shadow: none;
-  color: #dfe2ee;
+  color: {control_fg};
   border-radius: 14px;
 }}
 .rv-group button {{ background-color: transparent; }}
 .rv-group button.rv-read {{ padding: 0 8px 0 12px; }}
 .rv-group menubutton > button {{ min-width: 30px; padding: 0 10px 0 4px; }}
 button.rv-ctl:hover, .rv-group button:hover, menubutton.rv-ctl > button:hover {{
-  background-color: rgba(255, 255, 255, 0.12);
+  background-color: rgba({ink}, 0.12);
 }}
-.rv-group button:checked {{ background-color: rgba(139, 92, 246, 0.28); color: #ffffff; }}
+.rv-group button:checked {{ background-color: alpha({accent}, 0.28); color: {title_fg}; }}
 .rv-glyph {{ font-weight: 700; font-size: {title}pt; }}
 
 /* Read-aloud panel. */
@@ -358,34 +461,127 @@ button.rv-ctl:hover, .rv-group button:hover, menubutton.rv-ctl > button:hover {{
 .rv-panel entry {{
   min-height: 40px;
   border-radius: 12px;
-  background-color: rgba(255, 255, 255, 0.06);
-  color: #eef0f8;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background-color: rgba({ink}, 0.06);
+  color: {fg};
+  border: 1px solid rgba({ink}, 0.08);
   box-shadow: none;
 }}
 .rv-panel button.rv-primary {{
-  background-image: linear-gradient(135deg, #7c3aed, #c026d3);
+  background-image: linear-gradient(135deg, shade({accent}, 0.85), shade({accent}, 1.15));
   color: white; font-weight: 600; min-height: 40px; border-radius: 12px; border: none;
   padding: 0 16px;
 }}
 
 /* Popovers. */
 popover.rv-pop > contents {{
-  background-color: #171a28;
-  color: #eef0f8;
+  background-color: {popover};
+  color: {fg};
   border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba({ink}, 0.09);
   padding: 8px;
 }}
 popover.rv-pop button {{
   min-height: 36px; border-radius: 10px; padding: 0 12px;
-  background: transparent; border: none; box-shadow: none; color: #eef0f8;
+  background: transparent; border: none; box-shadow: none; color: {fg};
 }}
-popover.rv-pop button:hover {{ background-color: rgba(255, 255, 255, 0.08); }}
-popover.rv-pop .rv-heading {{ font-weight: 600; color: #8a90a8; font-size: {small}pt; margin: 4px 6px; }}
-popover.rv-pop .rv-info {{ color: #8a90a8; font-size: {small}pt; margin: 4px 6px; }}
+popover.rv-pop button:hover {{ background-color: rgba({ink}, 0.08); }}
+popover.rv-pop .rv-heading {{ font-weight: 600; color: {muted}; font-size: {small}pt; margin: 4px 6px; }}
+popover.rv-pop .rv-info {{ color: {muted}; font-size: {small}pt; margin: 4px 6px; }}
 "#
     )
+}
+
+thread_local! {
+    static PROVIDER: RefCell<Option<gtk::CssProvider>> = const { RefCell::new(None) };
+    static DESKTOP_MONITOR: RefCell<Option<gio::FileMonitor>> = const { RefCell::new(None) };
+}
+
+/// How long `desktop.toml` has to stay quiet before it is re-read: Settings
+/// writes it by rename, which a directory monitor reports as a burst.
+const DESKTOP_SETTLE: Duration = Duration::from_millis(150);
+
+/// Swap in the stylesheet for `desktop`. There is no libadwaita here, so no
+/// style manager: light or dark is only which CSS is loaded. The previous
+/// provider is removed, never stacked.
+fn load_css(font_size: u32, desktop: &Desktop) {
+    let Some(display) = gdk::Display::default() else {
+        return;
+    };
+    PROVIDER.with(|slot| {
+        if let Some(old) = slot.borrow_mut().take() {
+            gtk::style_context_remove_provider_for_display(&display, &old);
+        }
+        let provider = gtk::CssProvider::new();
+        provider.load_from_string(&css(font_size, desktop));
+        gtk::style_context_add_provider_for_display(
+            &display,
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+        *slot.borrow_mut() = Some(provider);
+    });
+}
+
+impl Ui {
+    /// Restyle for the desktop's current appearance: the stylesheet and the
+    /// waveform's colours.
+    fn apply_desktop(&self) {
+        let desktop = Desktop::load();
+        load_css(self.cfg.overlay.font_size.clamp(8, 40), &desktop);
+        self.wave.set_look(Look::from(&desktop));
+    }
+}
+
+/// Follow `desktop.toml` for as long as the overlay lives. The directory is
+/// watched rather than the file, because the file may not exist yet and is
+/// replaced by rename; events are filtered by name and debounced.
+fn watch_desktop(ui: &Rc<Ui>) {
+    let path = desktop::path();
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
+        return;
+    };
+    let name = name.to_os_string();
+    let monitor = match gio::File::for_path(dir)
+        .monitor_directory(gio::FileMonitorFlags::WATCH_MOVES, gio::Cancellable::NONE)
+    {
+        Ok(monitor) => monitor,
+        Err(e) => {
+            log::debug!("not following {}: {e}", path.display());
+            return;
+        }
+    };
+    let weak = Rc::downgrade(ui);
+    let pending: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
+    monitor.connect_changed(move |_, file, other, event| {
+        if matches!(
+            event,
+            gio::FileMonitorEvent::AttributeChanged
+                | gio::FileMonitorEvent::PreUnmount
+                | gio::FileMonitorEvent::Unmounted
+        ) {
+            return;
+        }
+        let names_desktop = |f: Option<&gio::File>| {
+            f.and_then(|f| f.basename())
+                .is_some_and(|b| b.as_os_str() == name.as_os_str())
+        };
+        if !names_desktop(Some(file)) && !names_desktop(other) {
+            return;
+        }
+        if let Some(id) = pending.borrow_mut().take() {
+            id.remove();
+        }
+        let fired = pending.clone();
+        let weak = weak.clone();
+        let id = glib::timeout_add_local_once(DESKTOP_SETTLE, move || {
+            fired.borrow_mut().take();
+            if let Some(ui) = weak.upgrade() {
+                ui.apply_desktop();
+            }
+        });
+        *pending.borrow_mut() = Some(id);
+    });
+    DESKTOP_MONITOR.with(|m| *m.borrow_mut() = Some(monitor));
 }
 
 fn icon_button(icon: &str, label: &str) -> gtk::Button {
@@ -424,13 +620,8 @@ fn popover(bottom_anchored: bool) -> (gtk::Popover, gtk::Box) {
 }
 
 fn build(app: &gtk::Application, cfg: Config, engine: Engine) -> Rc<Ui> {
-    let provider = gtk::CssProvider::new();
-    provider.load_from_string(&css(cfg.overlay.font_size.clamp(8, 40)));
-    gtk::style_context_add_provider_for_display(
-        &gdk::Display::default().expect("a display"),
-        &provider,
-        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-    );
+    let desktop = Desktop::load();
+    load_css(cfg.overlay.font_size.clamp(8, 40), &desktop);
     let bottom = cfg.overlay.position != "top";
 
     let window = gtk::ApplicationWindow::new(app);
@@ -460,7 +651,7 @@ fn build(app: &gtk::Application, cfg: Config, engine: Engine) -> Rc<Ui> {
     set_label(&mic_button, "Start dictation");
 
     // Waveform.
-    let wave = Wave::new();
+    let wave = Wave::new(Look::from(&desktop));
 
     let divider = gtk::Box::new(gtk::Orientation::Vertical, 0);
     divider.add_css_class("rv-divider");
@@ -729,15 +920,45 @@ fn build(app: &gtk::Application, cfg: Config, engine: Engine) -> Rc<Ui> {
     ui
 }
 
-/// Scrolling level history drawn as rounded bars (dots when quiet), violet to blue.
+/// What the waveform is painted in: the desktop's accent, and whether the
+/// ground behind it is light (idle dots are then dark rather than white).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Look {
+    accent: (f64, f64, f64),
+    light: bool,
+}
+
+impl From<&Desktop> for Look {
+    fn from(desktop: &Desktop) -> Look {
+        Look {
+            accent: hex_rgb(desktop.accent()),
+            light: desktop.appearance.theme_mode == ThemeMode::Light,
+        }
+    }
+}
+
+/// `#RRGGBB` as cairo's 0..1 channels. `Desktop::accent()` has already
+/// checked the shape, so a bad digit only falls to 0.
+fn hex_rgb(hex: &str) -> (f64, f64, f64) {
+    let channel = |i: usize| {
+        hex.get(i..i + 2)
+            .and_then(|c| u8::from_str_radix(c, 16).ok())
+            .map_or(0.0, |v| f64::from(v) / 255.0)
+    };
+    (channel(1), channel(3), channel(5))
+}
+
+/// Scrolling level history drawn as rounded bars (dots when quiet), in the
+/// accent: lighter on the left, the accent itself, deeper on the right.
 struct Wave {
     area: gtk::DrawingArea,
     levels: Rc<RefCell<VecDeque<f64>>>,
     active: Rc<Cell<bool>>,
+    look: Rc<Cell<Look>>,
 }
 
 impl Wave {
-    fn new() -> Wave {
+    fn new(look: Look) -> Wave {
         let area = gtk::DrawingArea::new();
         area.set_content_width(170);
         area.set_content_height(56);
@@ -746,15 +967,22 @@ impl Wave {
         let levels: Rc<RefCell<VecDeque<f64>>> =
             Rc::new(RefCell::new(std::iter::repeat_n(0.0, WAVE_BARS).collect()));
         let active = Rc::new(Cell::new(false));
-        let (l, a) = (levels.clone(), active.clone());
+        let look = Rc::new(Cell::new(look));
+        let (l, a, k) = (levels.clone(), active.clone(), look.clone());
         area.set_draw_func(move |_, cr, w, h| {
-            draw_wave(cr, w as f64, h as f64, &l.borrow(), a.get())
+            draw_wave(cr, w as f64, h as f64, &l.borrow(), a.get(), k.get())
         });
         Wave {
             area,
             levels,
             active,
+            look,
         }
+    }
+
+    fn set_look(&self, look: Look) {
+        self.look.set(look);
+        self.area.queue_draw();
     }
 
     fn widget(&self) -> &gtk::DrawingArea {
@@ -788,7 +1016,14 @@ impl Wave {
     }
 }
 
-fn draw_wave(cr: &gtk::cairo::Context, w: f64, h: f64, levels: &VecDeque<f64>, active: bool) {
+fn draw_wave(
+    cr: &gtk::cairo::Context,
+    w: f64,
+    h: f64,
+    levels: &VecDeque<f64>,
+    active: bool,
+    look: Look,
+) {
     let n = levels.len().max(1);
     let step = w / n as f64;
     let bar = (step * 0.5).clamp(2.0, 4.0);
@@ -796,12 +1031,16 @@ fn draw_wave(cr: &gtk::cairo::Context, w: f64, h: f64, levels: &VecDeque<f64>, a
 
     let gradient = gtk::cairo::LinearGradient::new(0.0, 0.0, w, 0.0);
     if active {
-        gradient.add_color_stop_rgba(0.0, 0.85, 0.55, 0.98, 1.0); // #d98cfa
-        gradient.add_color_stop_rgba(0.45, 0.55, 0.36, 0.96, 1.0); // #8b5cf6
-        gradient.add_color_stop_rgba(1.0, 0.38, 0.55, 0.98, 1.0); // #608cfa
+        let (r, g, b) = look.accent;
+        let lift = |c: f64| c + (1.0 - c) * 0.45;
+        let sink = |c: f64| c * 0.72;
+        gradient.add_color_stop_rgba(0.0, lift(r), lift(g), lift(b), 1.0);
+        gradient.add_color_stop_rgba(0.45, r, g, b, 1.0);
+        gradient.add_color_stop_rgba(1.0, sink(r), sink(g), sink(b), 1.0);
     } else {
-        gradient.add_color_stop_rgba(0.0, 1.0, 1.0, 1.0, 0.22);
-        gradient.add_color_stop_rgba(1.0, 1.0, 1.0, 1.0, 0.22);
+        let ink = if look.light { 0.0 } else { 1.0 };
+        gradient.add_color_stop_rgba(0.0, ink, ink, ink, 0.22);
+        gradient.add_color_stop_rgba(1.0, ink, ink, ink, 0.22);
     }
     let _ = cr.set_source(&gradient);
 
@@ -1127,5 +1366,40 @@ impl Ui {
                 "The clipboard has no text — copy something first".into(),
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn desktop(toml: &str) -> Desktop {
+        ::toml::from_str(toml).unwrap()
+    }
+
+    #[test]
+    fn the_stylesheet_follows_the_desktop() {
+        let light = css(
+            11,
+            &desktop(
+                "[appearance]\ntheme_mode = \"light\"\naccent = \"#F7768E\"\ntransparency = false\n",
+            ),
+        );
+        assert!(light.contains("@define-color accent_bg_color #F7768E;"));
+        assert!(light.contains("rgba(248, 249, 252, 1)"));
+        assert!(light.contains("alpha(#F7768E, 0.28)"));
+        assert_eq!(light.matches('{').count(), light.matches('}').count());
+
+        // Auto is dark, and the defaults are glass with Raven's accent.
+        let auto = css(11, &desktop("[appearance]\ntheme_mode = \"auto\"\n"));
+        assert!(auto.contains("rgba(17, 20, 31, 0.96)"));
+        assert!(auto.contains(crate::desktop::DEFAULT_ACCENT));
+    }
+
+    #[test]
+    fn the_wave_takes_the_accent() {
+        let look = Look::from(&desktop("[appearance]\naccent = \"#FF0080\"\n"));
+        assert_eq!(look.accent, (1.0, 0.0, 128.0 / 255.0));
+        assert!(!look.light);
     }
 }
