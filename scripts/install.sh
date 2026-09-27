@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Install an already-built RavenVoice for the current user and start it with
-# the session.
+# Install an already-built RavenVoice for the current user. It is an app like
+# any other: it runs when opened from the launcher and stops when closed.
 #
 #   scripts/install.sh [prefix]            install (default prefix: ~/.local)
 #   scripts/install.sh --uninstall [prefix]
 #
-# Autostart: on Raven, a supervised `raven-init --user` service; elsewhere an
-# XDG autostart entry. RAVENVOICE_AUTOSTART=no skips it.
+# RAVENVOICE_AUTOSTART=yes also starts it with every session: on Raven, a
+# supervised `raven-init --user` service; elsewhere an XDG autostart entry.
+# Without it, either left by an earlier install is removed.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -45,7 +46,20 @@ sed -i "s|^Exec=ravenvoice\$|Exec=$bin|" "$desktop"
 update-desktop-database "$prefix/share/applications" >/dev/null 2>&1 || true
 echo "Installed $bin"
 
-if [[ ${RAVENVOICE_AUTOSTART:-yes} != no ]]; then
+if [[ ${RAVENVOICE_AUTOSTART:-no} != yes ]]; then
+    # An earlier install started it with the session and restarted it
+    # whenever it was closed; take that away.
+    if [[ -e $raven_service ]]; then
+        raven-rc --user stop ravenvoice >/dev/null 2>&1 || true
+        rm -f "$raven_service"
+        raven-rc --user reload >/dev/null 2>&1 || true
+        echo "Removed the raven-init user service; open RavenVoice from the launcher."
+    fi
+    if [[ -e $xdg_autostart ]]; then
+        rm -f "$xdg_autostart"
+        echo "Removed $xdg_autostart."
+    fi
+else
     if on_raven; then
         mkdir -p "$(dirname "$raven_service")"
         sed "s|@BINDIR@|$prefix/bin|" "$here/data/ravenvoice.service.toml" >"$raven_service"

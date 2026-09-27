@@ -5,6 +5,7 @@ mod commands;
 mod config;
 mod desktop;
 mod engine;
+mod glass_tint;
 mod hotkey;
 mod ipc;
 mod model;
@@ -53,7 +54,7 @@ enum Command {
     StopSpeaking,
     /// Show the full overlay bar.
     Show,
-    /// Shrink the overlay to just the microphone button.
+    /// Hide the overlay without quitting; it comes back when you dictate or run `ravenvoice show`.
     Hide,
     /// Print whether dictation is on, as JSON.
     Status,

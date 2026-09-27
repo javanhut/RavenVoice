@@ -21,7 +21,7 @@ painful or impossible.
 
 ```sh
 imlazy run        # installs anything missing, builds, starts the overlay
-imlazy install    # install for your user and start with every session
+imlazy install    # install for your user; open it from the launcher
 ```
 
 That's all. `imlazy` runs `scripts/system-deps.sh` before every build. That
@@ -45,7 +45,7 @@ imlazy doctor
 | **Ctrl+Alt+R** | read the last dictated phrase aloud |
 | **Ctrl+Alt+X** | stop reading aloud |
 | click 🔊 on the overlay | open the read-aloud panel (type, paste, *Read clipboard*) |
-| click ⌄ on the overlay | shrink it to just the microphone button |
+| click × on the overlay | close RavenVoice (open it again from the launcher) |
 
 Speak naturally and pause briefly between phrases; each phrase is typed about
 half a second after you pause. The microphone button turns red while
@@ -140,9 +140,12 @@ phrase goes to Whisper with the encoder window sized to the phrase, which is
 3–4× faster than Whisper's fixed 30-second window. On a Meteor Lake laptop
 with `base.en`, a phrase comes back in about 0.4 s.
 
-`imlazy install` registers a supervised `raven-init --user` service
-(`~/.config/raven/services/ravenvoice.toml`); `raven-rc --user logs ravenvoice`
-shows its log. On other distributions it adds an XDG autostart entry instead.
+RavenVoice runs like any other app: open it from the launcher, close it with
+the × on the overlay. The shortcuts work while it is open. To have it start
+with every session instead, install with `RAVENVOICE_AUTOSTART=yes imlazy
+install`: that registers a supervised `raven-init --user` service
+(`~/.config/raven/services/ravenvoice.toml`, `raven-rc --user logs ravenvoice`
+shows its log), or an XDG autostart entry on other distributions.
 
 ## Limitations
 

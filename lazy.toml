@@ -84,7 +84,7 @@ alias = ["t"]
 run = ["cargo test"]
 
 [commands.install]
-desc = "Build and install RavenVoice for this user, starting with the session"
+desc = "Build and install RavenVoice for this user"
 dep = ["add-permssions", "release"]
 run = ["scripts/install.sh {{prefix}}"]
 

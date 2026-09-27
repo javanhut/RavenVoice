@@ -343,28 +343,101 @@ fn palette(mode: ThemeMode) -> &'static Palette {
     }
 }
 
+/// A glass theme other than Black: its ground and text, which the palette's
+/// neutrals are re-drawn between (see `tone`). Black Glass is no tint at
+/// all, so it draws exactly the palettes above.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Tint {
+    ground: [u8; 3],
+    text: [u8; 3],
+}
+
+impl Tint {
+    /// The tint for `appearance.glass_theme`, or `None` for Black Glass (and
+    /// for a theme this build does not know). The colours are
+    /// `crate::glass_tint`'s, so the pill wears the compositor's grounds.
+    fn for_desktop(desktop: &Desktop) -> Option<Tint> {
+        let light = desktop.appearance.theme_mode == ThemeMode::Light;
+        let css = crate::glass_tint::css(&desktop.appearance.glass_theme, light);
+        let colour = |name: &str| {
+            let at = css.find(&format!("@define-color {name} #"))? + name.len() + 16;
+            parse_rgb(css.get(at..at + 6)?)
+        };
+        Some(Tint {
+            ground: colour("window_bg_color")?,
+            text: colour("window_fg_color")?,
+        })
+    }
+
+    /// `colour` moved from `p`'s ground-to-text axis onto this tint's: a
+    /// surface a shade off the bar stays a shade off the new ground, muted
+    /// text stays as far between ground and text as it was.
+    fn tone(&self, p: &Palette, colour: [u8; 3]) -> [u8; 3] {
+        let (Some(g), Some(t)) = (parse_triple(p.bar), parse_rgb(p.fg)) else {
+            return colour;
+        };
+        let axis = |i: usize| f64::from(t[i]) - f64::from(g[i]);
+        let along: f64 = (0..3)
+            .map(|i| (f64::from(colour[i]) - f64::from(g[i])) * axis(i))
+            .sum();
+        let length: f64 = (0..3).map(|i| axis(i) * axis(i)).sum();
+        let k = if length > 0.0 { along / length } else { 0.0 };
+        let m = |i: usize| {
+            let (a, b) = (f64::from(self.ground[i]), f64::from(self.text[i]));
+            (a + (b - a) * k).round().clamp(0.0, 255.0) as u8
+        };
+        [m(0), m(1), m(2)]
+    }
+}
+
+/// `#RRGGBB` (or `RRGGBB`) as bytes.
+fn parse_rgb(hex: &str) -> Option<[u8; 3]> {
+    let h = hex.strip_prefix('#').unwrap_or(hex);
+    let at = |i: usize| h.get(i..i + 2).and_then(|c| u8::from_str_radix(c, 16).ok());
+    Some([at(0)?, at(2)?, at(4)?])
+}
+
+/// The pill's `r, g, b` as bytes.
+fn parse_triple(rgb: &str) -> Option<[u8; 3]> {
+    let mut parts = rgb.split(',').map(|c| c.trim().parse::<u8>().ok());
+    Some([parts.next()??, parts.next()??, parts.next()??])
+}
+
 fn css(font_size: u32, desktop: &Desktop) -> String {
     let title = font_size + 2;
     let small = font_size.saturating_sub(1).max(8);
     let p = palette(desktop.appearance.theme_mode);
     let accent = desktop.accent();
     let Palette {
-        bar,
         ink,
         shadow,
-        fg,
-        title: title_fg,
-        muted,
-        control_fg,
-        core_fg,
-        popover,
         done,
         error,
         error_sub,
         ..
     } = *p;
-    let (ring_a, ring_b) = p.ring;
-    let (core, core_hover, core_active) = p.core;
+    // The neutrals, re-drawn in the glass theme's ground and text when it is
+    // not Black.
+    let tint = Tint::for_desktop(desktop);
+    let tone = |colour: &str| match (tint, parse_rgb(colour)) {
+        (Some(tint), Some(c)) => {
+            let [r, g, b] = tint.tone(p, c);
+            format!("#{r:02x}{g:02x}{b:02x}")
+        }
+        _ => colour.to_string(),
+    };
+    let bar = match (tint, parse_triple(p.bar)) {
+        (Some(tint), Some(c)) => {
+            let [r, g, b] = tint.tone(p, c);
+            format!("{r}, {g}, {b}")
+        }
+        _ => p.bar.to_string(),
+    };
+    let (fg, title_fg, muted, control_fg) =
+        (tone(p.fg), tone(p.title), tone(p.muted), tone(p.control_fg));
+    let (core_fg, popover) = (tone(p.core_fg), tone(p.popover));
+    let (ring_a, ring_b) = (tone(p.ring.0), tone(p.ring.1));
+    let (core, core_hover, core_active) = (tone(p.core.0), tone(p.core.1), tone(p.core.2));
     let live = p.live.replace("{accent}", accent);
     // Glass lets a little of the desktop through; the compositor blurs it.
     let bar_alpha = if desktop.appearance.transparency {
@@ -619,6 +692,8 @@ fn popover(bottom_anchored: bool) -> (gtk::Popover, gtk::Box) {
     (pop, body)
 }
 
+const CLOSE_LABEL: &str = "Close RavenVoice";
+
 fn build(app: &gtk::Application, cfg: Config, engine: Engine) -> Rc<Ui> {
     let desktop = Desktop::load();
     load_css(cfg.overlay.font_size.clamp(8, 40), &desktop);
@@ -702,7 +777,7 @@ fn build(app: &gtk::Application, cfg: Config, engine: Engine) -> Rc<Ui> {
     settings.set_valign(gtk::Align::Center);
     set_label(&settings, "Microphone and settings");
 
-    let close = icon_button("window-close-symbolic", "Shrink to the microphone button");
+    let close = icon_button("window-close-symbolic", CLOSE_LABEL);
     close.add_css_class("rv-ctl");
     close.set_valign(gtk::Align::Center);
 
@@ -892,10 +967,17 @@ fn build(app: &gtk::Application, cfg: Config, engine: Engine) -> Rc<Ui> {
         }
     });
 
+    // Close means close, as in any other app: RavenVoice runs when it is
+    // opened and not otherwise.
     let weak = Rc::downgrade(&ui);
+    let close_app = app.clone();
     close.connect_clicked(move |_| {
         if let Some(ui) = weak.upgrade() {
-            ui.set_compact(!ui.compact.get());
+            if ui.compact.get() {
+                ui.set_compact(false);
+            } else {
+                close_app.quit();
+            }
         }
     });
 
@@ -1137,6 +1219,9 @@ impl Ui {
                     },
                 );
                 if on {
+                    // Dictating from the shortcut with the bar closed: bring
+                    // it back, or there is nothing to show it is listening.
+                    self.window.set_visible(true);
                     self.mic_button.add_css_class("listening");
                     self.fatal.borrow_mut().take();
                 } else {
@@ -1185,8 +1270,13 @@ impl Ui {
                 }
             }
             UiEvent::SetVisible(v) => {
-                let show = v.unwrap_or(self.compact.get());
-                self.set_compact(!show);
+                let show = v.unwrap_or(!self.window.is_visible() || self.compact.get());
+                if show {
+                    self.set_compact(false);
+                    self.window.set_visible(true);
+                } else {
+                    self.close();
+                }
             }
         }
         self.render();
@@ -1203,10 +1293,18 @@ impl Ui {
         let (icon, label) = if compact {
             ("go-up-symbolic", "Show the full RavenVoice bar")
         } else {
-            ("window-close-symbolic", "Shrink to the microphone button")
+            ("window-close-symbolic", CLOSE_LABEL)
         };
         self.close.set_icon_name(icon);
         set_label(&self.close, label);
+    }
+
+    /// Take the bar off the screen without quitting (`ravenvoice hide`): the
+    /// shortcut still dictates and brings the bar back, as do `ravenvoice
+    /// show` and launching it again.
+    fn close(&self) {
+        self.tts_toggle.set_active(false);
+        self.window.set_visible(false);
     }
 
     fn flash(&self, text: String, error: bool) {
@@ -1394,6 +1492,19 @@ mod tests {
         let auto = css(11, &desktop("[appearance]\ntheme_mode = \"auto\"\n"));
         assert!(auto.contains("rgba(17, 20, 31, 0.96)"));
         assert!(auto.contains(crate::desktop::DEFAULT_ACCENT));
+    }
+
+    #[test]
+    fn the_stylesheet_wears_the_glass_theme() {
+        // Black Glass is the palette exactly as it is.
+        let black = css(11, &desktop("[appearance]\nglass_theme = \"black\"\n"));
+        assert_eq!(black, css(11, &desktop("")));
+
+        // Rose puts the pill on the compositor's rose ground, in its text.
+        let rose = css(11, &desktop("[appearance]\nglass_theme = \"rose\"\n"));
+        assert!(rose.contains("rgba(90, 58, 78, 0.96)"), "{rose}");
+        assert!(rose.contains("color: #fff4f8;"));
+        assert_eq!(rose.matches('{').count(), rose.matches('}').count());
     }
 
     #[test]

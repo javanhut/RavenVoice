@@ -1,5 +1,5 @@
 //! The slice of `~/.config/raven/desktop.toml` RavenVoice follows: theme
-//! mode, accent and window transparency. Raven Settings owns the file; every
+//! mode, accent, glass theme and window transparency. Raven Settings owns the file; every
 //! key is optional and a parse error means the defaults, so a newer Settings
 //! never breaks an older RavenVoice.
 
@@ -24,6 +24,9 @@ pub struct Appearance {
     pub theme_mode: ThemeMode,
     pub accent: String,
     pub transparency: bool,
+    /// Black, Fog, Arctic, Midnight or Rose; see `crate::glass_tint`.
+    /// Empty (or anything unknown) is Black Glass.
+    pub glass_theme: String,
 }
 
 impl Default for Appearance {
@@ -32,6 +35,7 @@ impl Default for Appearance {
             theme_mode: ThemeMode::Dark,
             accent: DEFAULT_ACCENT.into(),
             transparency: true,
+            glass_theme: String::new(),
         }
     }
 }
