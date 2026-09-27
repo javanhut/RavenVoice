@@ -12,7 +12,8 @@ painful or impossible.
   announced when plugged in; if yours is unplugged mid-sentence RavenVoice
   switches to the system default and switches back when it returns.
 - **Text to speech**: read typed or pasted text, the clipboard, or your last
-  dictation aloud (espeak-ng, or Piper for natural voices).
+  dictation aloud with a natural Piper voice (`imlazy setup` installs it;
+  espeak-ng is the fallback).
 - **A floating overlay** (GTK4 + layer-shell) that never steals focus from the
   app you are dictating into, with a live level meter, a live transcript and
   screen-reader announcements.
@@ -117,7 +118,7 @@ key_delay_ms = 4        # raise if an app drops letters
 [tts]
 rate_wpm = 175
 echo_dictation = false  # read each dictated phrase back to you
-piper_model = "/path/to/en_US-amy-medium.onnx"   # natural voice via Piper
+piper_model = "/path/to/en_US-amy-medium.onnx"   # another Piper voice; `imlazy setup` installs en_US-lessac-high
 
 [overlay]
 position = "bottom"     # or "top"

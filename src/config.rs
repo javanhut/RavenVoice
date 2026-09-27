@@ -160,9 +160,11 @@ pub struct TtsConfig {
     pub espeak_voice: String,
     /// Speaking rate in words per minute (espeak-ng) — piper uses `piper_length_scale`.
     pub rate_wpm: u32,
-    /// Piper executable; unset searches PATH for `piper-tts` and `piper`.
+    /// Piper executable; unset uses the one `imlazy setup` installs under
+    /// ~/.local/share/ravenvoice/piper, then searches PATH for `piper-tts` and `piper`.
     pub piper_bin: Option<PathBuf>,
-    /// Piper `.onnx` voice; its `.onnx.json` must sit next to it.
+    /// Piper `.onnx` voice; its `.onnx.json` must sit next to it. Unset uses
+    /// the voice `imlazy setup` downloads (en_US-lessac-high).
     pub piper_model: Option<PathBuf>,
     /// >1 speaks slower, <1 faster.
     pub piper_length_scale: f32,

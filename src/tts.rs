@@ -49,26 +49,36 @@ fn piper_sample_rate(model: &Path) -> Result<u32> {
         .ok_or_else(|| anyhow!("{} has no audio.sample_rate", json_path.display()))
 }
 
+/// Where `scripts/system-deps.sh` installs Piper and its default voice, used
+/// when `tts.piper_bin` / `tts.piper_model` are unset.
+fn piper_dir() -> PathBuf {
+    crate::config::data_dir().join("piper")
+}
+
+const DEFAULT_PIPER_VOICE: &str = "en_US-lessac-high";
+
 fn resolve(cfg: &TtsConfig) -> Result<Backend> {
     let want = cfg.engine.as_str();
     if want == "auto" || want == "piper" {
         let bin = cfg
             .piper_bin
             .clone()
+            .or_else(|| Some(piper_dir().join("venv/bin/piper")).filter(|p| p.is_file()))
             .or_else(|| which("piper-tts"))
             .or_else(|| which("piper"));
-        match (bin, &cfg.piper_model) {
-            (Some(bin), Some(model)) if model.exists() => {
-                let rate = piper_sample_rate(model)?;
-                return Ok(Backend::Piper {
-                    bin,
-                    model: model.clone(),
-                    rate,
-                });
+        let model = cfg.piper_model.clone().unwrap_or_else(|| {
+            piper_dir()
+                .join("voices")
+                .join(format!("{DEFAULT_PIPER_VOICE}.onnx"))
+        });
+        match bin {
+            Some(bin) if model.exists() => {
+                let rate = piper_sample_rate(&model)?;
+                return Ok(Backend::Piper { bin, model, rate });
             }
             _ if want == "piper" => {
                 bail!(
-                    "Piper needs both the piper binary and tts.piper_model (an .onnx voice) configured"
+                    "Piper is not installed with a voice; run `imlazy setup`, or set tts.piper_bin and tts.piper_model"
                 )
             }
             _ => {}

@@ -7,6 +7,12 @@
 # package manager (pacman, apt, dnf, zypper, xbps, apk), with each package
 # translated to that distribution's name for it.
 #
+# Piper, the neural voice that reads text aloud, is not packaged by most
+# distributions, so it goes into a Python virtual environment of its own under
+# ~/.local/share/ravenvoice/piper with a default voice next to it. That needs
+# no root, and RavenVoice looks there when tts.piper_bin/piper_model are unset.
+# Without it, speech falls back to espeak-ng, which sounds robotic.
+#
 # Checked by what the build and the program actually look for -- a pkg-config
 # module, a command on PATH, write access to /dev/uinput -- rather than by
 # package name, so it costs a few milliseconds when all is well and also
@@ -53,6 +59,8 @@ requirements=(
     "pc:gtk4-layer-shell-0|gtk4-layer-shell|libgtk4-layer-shell-dev|gtk4-layer-shell-devel|gtk4-layer-shell-devel|gtk4-layer-shell-devel|gtk4-layer-shell-dev"
     "pc:alsa|alsa-lib|libasound2-dev|alsa-lib-devel|alsa-devel|alsa-lib-devel|alsa-lib-dev"
     "cmd:espeak-ng|espeak-ng|espeak-ng|espeak-ng|espeak-ng|espeak-ng|espeak-ng"
+    "pyvenv|python|python3-venv|python3|python3|python3|python3"
+    "cmd:curl|curl|curl|curl|curl|curl|curl"
 )
 
 present() {
@@ -64,6 +72,8 @@ present() {
         pc:*) command -v pkg-config >/dev/null 2>&1 && pkg-config --exists "${probe#pc:}" ;;
         # .cargo/config.toml points the whisper.cpp build at /usr/bin/cmake.
         cmake) /usr/bin/cmake --version >/dev/null 2>&1 ;;
+        # Debian splits venv (and the ensurepip it relies on) out of python3.
+        pyvenv) python3 -c 'import venv, ensurepip' >/dev/null 2>&1 ;;
     esac
 }
 
@@ -95,6 +105,48 @@ missing_packages() {
 uinput_ready() { [[ -w /dev/uinput ]]; }
 in_input_group() { id -nG "${SUDO_USER:-$USER}" | tr ' ' '\n' | grep -qx input; }
 
+# ------------------------------------------------------------------- piper --
+
+# Everything here belongs to the user, even when this script runs under sudo.
+user="${SUDO_USER:-$USER}"
+as_user=()
+if ((EUID == 0)) && [[ -n ${SUDO_USER:-} ]]; then
+    as_user=(sudo -u "$SUDO_USER" -H)
+    data_home="$(getent passwd "$SUDO_USER" | cut -d: -f6)/.local/share"
+else
+    data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
+fi
+piper_dir="$data_home/ravenvoice/piper"
+# Keep in step with DEFAULT_PIPER_VOICE in src/tts.rs.
+piper_voice=en_US-lessac-high
+piper_voice_url=https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/high
+
+piper_ready() {
+    [[ -x $piper_dir/venv/bin/piper ]] &&
+        [[ -s $piper_dir/voices/$piper_voice.onnx ]] &&
+        [[ -s $piper_dir/voices/$piper_voice.onnx.json ]]
+}
+
+install_piper() {
+    echo "==> Installing Piper and the $piper_voice voice into $piper_dir"
+    "${as_user[@]}" mkdir -p "$piper_dir/voices"
+    if [[ ! -x $piper_dir/venv/bin/piper ]]; then
+        "${as_user[@]}" python3 -m venv "$piper_dir/venv" &&
+            "${as_user[@]}" "$piper_dir/venv/bin/pip" install -q --disable-pip-version-check piper-tts ||
+            return 1
+    fi
+    local file
+    for file in "$piper_voice.onnx" "$piper_voice.onnx.json"; do
+        [[ -s $piper_dir/voices/$file ]] && continue
+        # Download beside the target and move it into place, so an
+        # interrupted download is never mistaken for a voice.
+        "${as_user[@]}" curl -fL --progress-bar -o "$piper_dir/voices/$file.part" \
+            "$piper_voice_url/$file" &&
+            "${as_user[@]}" mv "$piper_dir/voices/$file.part" "$piper_dir/voices/$file" ||
+            return 1
+    done
+}
+
 # ------------------------------------------------------------------- report --
 
 mapfile -t missing < <(missing_packages)
@@ -102,14 +154,17 @@ needs_uinput=false
 uinput_ready || needs_uinput=true
 needs_group=false
 in_input_group || needs_group=true
+needs_piper=false
+piper_ready || needs_piper=true
 
-if ((${#missing[@]} == 0)) && ! $needs_uinput && ! $needs_group; then
+if ((${#missing[@]} == 0)) && ! $needs_uinput && ! $needs_group && ! $needs_piper; then
     exit 0
 fi
 
 ((${#missing[@]} > 0)) && echo "RavenVoice needs these packages: ${missing[*]}"
 $needs_uinput && echo "RavenVoice needs permission to use /dev/uinput (to type into other apps)"
 $needs_group && echo "RavenVoice needs you in the 'input' group (shortcuts and typing)"
+$needs_piper && echo "RavenVoice needs Piper and a voice for natural-sounding speech (~200 MB download)"
 if $check_only; then
     exit 1
 fi
@@ -144,7 +199,6 @@ if $needs_uinput; then
 fi
 
 if $needs_group; then
-    user="${SUDO_USER:-$USER}"
     echo "==> Adding $user to the input group"
     "${sudo[@]}" usermod -aG input "$user"
     echo "    Log out and back in once for the new group to take effect."
@@ -158,6 +212,13 @@ mapfile -t still < <(missing_packages)
 if ((${#still[@]} > 0)); then
     echo "Still missing after install: ${still[*]}" >&2
     exit 1
+fi
+
+# Piper is not needed to build or run RavenVoice, so a failure here (offline,
+# no wheel for this Python yet) is a warning: speech falls back to espeak-ng
+# and the next run of this script tries again.
+if $needs_piper && ! install_piper; then
+    echo "Could not install Piper; text will be read aloud by espeak-ng for now." >&2
 fi
 
 if command -v rustc >/dev/null 2>&1; then

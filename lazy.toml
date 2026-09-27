@@ -13,7 +13,8 @@ prefix = "$HOME/.local"
 # Everything that builds or runs RavenVoice depends on this first. It checks
 # for what the build links against (gtk4, gtk4-layer-shell, alsa), the tools
 # it calls (cargo, a C++ compiler, cmake for whisper.cpp, espeak-ng for read
-# aloud) and write access to /dev/uinput, and fixes only what is missing --
+# aloud), Piper and a natural voice under ~/.local/share/ravenvoice/piper, and
+# write access to /dev/uinput, and fixes only what is missing --
 # with `rvn` on Raven or the distribution's package manager elsewhere -- so a
 # fresh machine needs nothing done by hand. A no-op when all is there.
 [commands.add-permissions]
@@ -85,7 +86,7 @@ run = ["cargo test"]
 
 [commands.install]
 desc = "Build and install RavenVoice for this user"
-dep = ["add-permssions", "release"]
+dep = ["add-permissions", "release"]
 run = ["scripts/install.sh {{prefix}}"]
 
 [commands.uninstall]
