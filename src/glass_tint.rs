@@ -1,6 +1,6 @@
 //! The glass theme, `appearance.glass_theme` in `~/.config/raven/desktop.toml`,
-//! for an app's own windows: the same Black, Fog, Arctic, Midnight and Rose
-//! glass the compositor draws its panels in, so a window matches the dock,
+//! for an app's own windows: the same Black, Fog, Arctic, Midnight, Rose,
+//! Tokyo Neon, Clear, Ember and Nebula glass the compositor draws its panels in, so a window matches the dock,
 //! the launcher and its own title bar.
 //!
 //! Raven Glass (`raven-glass.css`, and `raven-glass-light.css` over it) is
@@ -14,12 +14,20 @@
 //! `huginn-comp/src/theme.rs`). Keep every app's copy of this file identical.
 
 /// (value, dark ground, dark text, light ground, light text).
-const THEMES: [(&str, &str, &str, &str, &str); 4] = [
+const THEMES: [(&str, &str, &str, &str, &str); 8] = [
     ("fog", "#6E7D94", "#FFFFFF", "#E5EAF1", "#1C2433"),
     ("arctic", "#4F7F9F", "#FFFFFF", "#DDEEF8", "#0E2A3C"),
     ("midnight", "#0E1630", "#E8EEFF", "#E3E7F6", "#101A3A"),
     ("rose", "#5A3A4E", "#FFF4F8", "#F6E7EE", "#3A1E2C"),
+    ("tokyo-neon", "#0A1A14", "#E6FFF1", "#E2F6EA", "#06291A"),
+    ("clear", "#1C1F26", "#FFFFFF", "#F7F9FC", "#0F1218"),
+    ("ember", "#3A2418", "#FFF3E8", "#F8EBDF", "#3A1F10"),
+    ("nebula", "#24163A", "#F3EAFF", "#EEE6FA", "#22123C"),
 ];
+
+/// Clear Glass is the see-through one: its windows let the desktop through
+/// as its panels do, where every other glass window is near-opaque.
+const CLEAR: &str = "clear";
 
 /// The CSS that turns Raven Glass into `theme`, in light or dark. Empty for
 /// Black Glass and for a value this build does not know, which the
@@ -27,7 +35,8 @@ const THEMES: [(&str, &str, &str, &str, &str); 4] = [
 pub fn css(theme: &str, light: bool) -> String {
     let want = squash(theme);
     let want = want.strip_suffix("glass").unwrap_or(&want);
-    let Some(&(_, dark_bg, dark_fg, light_bg, light_fg)) = THEMES.iter().find(|t| t.0 == want)
+    let Some(&(value, dark_bg, dark_fg, light_bg, light_fg)) =
+        THEMES.iter().find(|t| squash(t.0) == want)
     else {
         return String::new();
     };
@@ -47,7 +56,7 @@ pub fn css(theme: &str, light: bool) -> String {
             mix(bg, WHITE, 0.35),
             mix(bg, WHITE, 0.70),
             mix(bg, fg, 0.05),
-            0.88,
+            if value == CLEAR { 0.62 } else { 0.88 },
         )
     } else {
         (
@@ -55,7 +64,7 @@ pub fn css(theme: &str, light: bool) -> String {
             mix(bg, WHITE, 0.08),
             mix(bg, WHITE, 0.11),
             mix(bg, BLACK, 0.22),
-            0.85,
+            if value == CLEAR { 0.55 } else { 0.85 },
         )
     };
     let (bg, fg) = (hex(bg), hex(fg));
@@ -130,5 +139,19 @@ mod glass_tint_tests {
         let c = css("fog", true);
         assert!(c.contains("@define-color window_fg_color #1c2433;"), "{c}");
         assert!(c.contains("window.raven.glass {"), "{c}");
+        for v in ["tokyo-neon", "Tokyo Neon Glass", "tokyoneon"] {
+            let c = css(v, false);
+            assert!(
+                c.contains("@define-color window_bg_color #0a1a14;"),
+                "{v}: {c}"
+            );
+        }
+    }
+
+    #[test]
+    fn clear_glass_is_the_most_see_through() {
+        assert!(css("clear", false).contains("alpha(#1c1f26, 0.55)"));
+        assert!(css("clear", true).contains("alpha(#f7f9fc, 0.62)"));
+        assert!(css("ember", false).contains("alpha(#3a2418, 0.85)"));
     }
 }

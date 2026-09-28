@@ -24,7 +24,8 @@ pub struct Appearance {
     pub theme_mode: ThemeMode,
     pub accent: String,
     pub transparency: bool,
-    /// Black, Fog, Arctic, Midnight or Rose; see `crate::glass_tint`.
+    /// Black, Fog, Arctic, Midnight, Rose, Tokyo Neon, Clear, Ember or
+    /// Nebula; see `crate::glass_tint`.
     /// Empty (or anything unknown) is Black Glass.
     pub glass_theme: String,
 }
