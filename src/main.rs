@@ -5,7 +5,6 @@ mod commands;
 mod config;
 mod desktop;
 mod engine;
-mod glass_tint;
 mod hotkey;
 mod ipc;
 mod model;

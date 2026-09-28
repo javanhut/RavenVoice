@@ -1574,6 +1574,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc33ff2d4973d518d823d61aa239014831e521c75da58e3df4840d3f47749d09"
 
 [[package]]
+name = "raven-glass"
+version = "0.0.1"
+
+[[package]]
 name = "ravenvoice"
 version = "0.1.0"
 dependencies = [
@@ -1589,6 +1593,7 @@ dependencies = [
  "gtk4-layer-shell",
  "hound",
  "log",
+ "raven-glass",
  "serde",
  "serde_json",
  "toml",

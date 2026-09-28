@@ -32,6 +32,10 @@ toml = "1.1.6"
 ureq = "3.4.2"
 whisper-rs = { version = "0.16.0", features = ["log_backend"] }
 
+# Raven Glass, the look every Raven app shares, from beside the compositor.
+# .cargo/config.toml builds it from ../RavenGUI when that checkout is there.
+raven-glass = { git = "https://github.com/javanhut/RavenGUI.git" }
+
 [profile.release]
 lto = "thin"
 codegen-units = 4

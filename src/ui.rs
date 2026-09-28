@@ -355,10 +355,10 @@ struct Tint {
 impl Tint {
     /// The tint for `appearance.glass_theme`, or `None` for Black Glass (and
     /// for a theme this build does not know). The colours are
-    /// `crate::glass_tint`'s, so the pill wears the compositor's grounds.
+    /// `raven_glass::tint`'s, so the pill wears the compositor's grounds.
     fn for_desktop(desktop: &Desktop) -> Option<Tint> {
         let light = desktop.appearance.theme_mode == ThemeMode::Light;
-        let css = crate::glass_tint::css(&desktop.appearance.glass_theme, light);
+        let css = raven_glass::tint::css(&desktop.appearance.glass_theme, light);
         let colour = |name: &str| {
             let at = css.find(&format!("@define-color {name} #"))? + name.len() + 16;
             parse_rgb(css.get(at..at + 6)?)
